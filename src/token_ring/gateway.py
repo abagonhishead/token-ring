@@ -48,6 +48,16 @@ Outbound calls (`token-ring call`):
                                  "message", "host", "assistant"}, {"ping": 1}
   POST /calls/<id>/status        {"status"}: the bridge reporting progress
 
+Notifications ([notify]): when a session leaves voicemail, and every remind_every_minutes while
+any is unheard, the user gets a text message on the phone (via = "phone": the bridge sends it
+through Asterisk; the outbound feed carries {"text", "id"}) and/or an ntfy notification.
+
+  POST /texts/<id>               {"status": "sent" | "unreachable" | "failed"}: the bridge
+                                 reporting on a text
+  POST /texts/reply              {"from", "body"}: the user texted back, which stops reminders
+                                 until there's new voicemail (Asterisk can't pass on Linphone's
+                                 read receipts, so a reply stands in for one)
+
 Voicemail (text: read out in the sender's voice). Messages for the user are in
 <data_dir>/voicemail/inbox, theirs for sessions in outbox until delivered:
 
@@ -76,6 +86,7 @@ import ssl
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -85,6 +96,8 @@ from .text import spoken_label
 MAX_TEXT = 2000
 PING_EVERY_S = 5.0
 VM_RETRY_S = 30
+NOTIFY_RETRY_S = 60
+TEXT_WAIT_S = 20
 
 log = logging.getLogger("token-ring")
 
@@ -164,6 +177,8 @@ class Gateway:
         self.lock = threading.Lock()
         self.vm_lock = threading.Lock()
         self.vm_deliver = threading.Event()
+        self.notify_now = threading.Event()
+        self.texts = {}             # id -> {"done": threading.Event, "status"}: texts the bridge is sending
 
     @property
     def backend(self):
@@ -225,6 +240,147 @@ class Gateway:
                     log.info("voicemail %s delivered to %s", item["id"], item["to"])
                 except Exception as e:
                     log.warning("voicemail %s: %s", item["id"], e)
+
+    def vm_update(self, msg_id, change):
+        """Re-read an inbox message, change(item) it and save it (under the lock, so a "heard" from
+        the phone isn't lost). Returns the item, or None if it's gone."""
+        path = os.path.join(self.vm_dir, "inbox", f"{msg_id}.json")
+        with self.vm_lock:
+            try:
+                with open(path) as f:
+                    item = json.load(f)
+            except (OSError, ValueError):
+                return None
+            change(item)
+            self.vm_save("inbox", item)
+            return item
+
+    # Notifications: a text to the phone (through the bridge) or ntfy when a session leaves
+    # voicemail, and a reminder every so often while any is unheard. The inbox is the queue: each
+    # message keeps "notified": {channel: time} once that channel has told the user about it.
+
+    def notify_loop(self):
+        while True:
+            self.notify_now.wait(NOTIFY_RETRY_S)
+            self.notify_now.clear()
+            try:
+                self.notify_pending()
+            except Exception as e:
+                log.warning("notifications: %s", e)
+
+    def notify_pending(self):
+        conf = config.section("notify")
+        channels = conf.get("via", [])
+        if not channels:
+            return
+        unheard = [m for m in self.vm_list("inbox") if not m.get("heard")]
+        state = self.notify_state()
+        for via in channels:
+            fresh = [m for m in unheard if via not in m.get("notified", {})]
+            st = state.setdefault(via, {})
+            every = conf.get("remind_every_minutes", 60) * 60
+            # Reminders only while the last text hasn't been answered: a reply to it (any reply)
+            # is the nearest thing to a read receipt that Asterisk can pass on
+            answered = st.get("replied", 0) >= st.get("last", 0) > 0
+            if fresh:
+                text = self.notice(fresh, conf)
+            elif unheard and every and not answered and time.time() - st.get("last", 0) >= every:
+                text = self.reminder(unheard)
+            else:
+                continue
+            if not self.send_notification(via, text, conf):
+                continue
+            now = time.time()
+            for m in fresh:
+                self.vm_update(m["id"], lambda item: item.setdefault("notified", {}).__setitem__(via, now))
+            st["last"] = now
+            self.save_notify_state(state)
+
+    def notify_state(self):
+        try:
+            with open(os.path.join(self.data_dir, "notify.json")) as f:
+                state = json.load(f)
+            return {k: v for k, v in state.items() if isinstance(v, dict)}
+        except (OSError, ValueError):
+            return {}
+
+    def save_notify_state(self, state):
+        path = os.path.join(self.data_dir, "notify.json")
+        os.makedirs(self.data_dir, exist_ok=True)
+        with open(path + ".tmp", "w") as f:
+            json.dump(state, f)
+        os.replace(path + ".tmp", path)
+
+    def text_reply(self, sender, body):
+        """The user texted back: counts as having read the last text (no more reminders until
+        there's new voicemail)."""
+        with self.lock:
+            state = self.notify_state()
+            state.setdefault("phone", {})["replied"] = time.time()
+            self.save_notify_state(state)
+        log.info("text from %s: %r", sender, body[:80])
+
+    def notice(self, fresh, conf):
+        dial = self.dial()
+        if len(fresh) == 1:
+            m = fresh[0]
+            preview = f": {m['text'][:conf.get('preview_chars', 160)]}" if conf.get("preview", True) else "."
+            return f"New voicemail from {m['label']}{preview}{dial}"
+        return f"{len(fresh)} new voicemails, from {self.who(fresh)}.{dial}"
+
+    def reminder(self, unheard):
+        n = len(unheard)
+        return f"You have {n} new voicemail{'' if n == 1 else 's'}, from {self.who(unheard)}.{self.dial()}"
+
+    @staticmethod
+    def who(messages):
+        labels = list(dict.fromkeys(m["label"] for m in messages))
+        return labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + f" and {labels[-1]}"
+
+    @staticmethod
+    def dial():
+        ext = config.section("bridge").get("voicemail_extension", "")
+        return f" Dial {ext} to listen." if ext else ""
+
+    def send_notification(self, via, text, conf):
+        if via == "phone":
+            return self.text_phone(text)
+        if via == "ntfy":
+            return self.ntfy(text, conf.get("ntfy", {}))
+        log.warning("notify: unknown channel %r", via)
+        return False
+
+    def text_phone(self, text):
+        """A text message to the phone, sent by the bridge through Asterisk. True once it's gone
+        to a registered phone."""
+        text_id = uuid.uuid4().hex[:12]
+        pending = {"done": threading.Event(), "status": None}
+        with self.lock:
+            if not self.outbound:
+                return False
+            self.texts[text_id] = pending
+            for q in self.outbound:
+                q.put({"text": text, "id": text_id})
+        pending["done"].wait(TEXT_WAIT_S)
+        with self.lock:
+            self.texts.pop(text_id, None)
+        log.info("text %s: %s (%r)", text_id, pending["status"] or "no reply from the bridge", text[:60])
+        return pending["status"] == "sent"
+
+    def ntfy(self, text, c):
+        """POST to an ntfy topic (https://ntfy.sh, or your own server), which keeps it until the
+        app collects it."""
+        headers = {"Title": c.get("title", "Voicemail"), "Tags": c.get("tags", "telephone_receiver")}
+        token = os.environ.get(c.get("token_env", ""), "") if c.get("token_env") else ""
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(c["url"], data=text.encode(), method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return 200 <= resp.status < 300
+        except Exception as e:
+            log.warning("ntfy: %s", e)
+            return False
 
     # Outbound calls
 
@@ -360,6 +516,17 @@ class Handler(BaseHTTPRequestHandler):
                 key = "operator"
             call_id, why = G.place_call(key, re.sub(r"\s+", " ", message).strip()[:600])
             return self.reply(200, {"id": call_id}) if call_id else self.reply(409, {"error": why})
+        if self.path == "/texts/reply":  # the user texted the PBX (the bridge passes it on)
+            G.text_reply(str(body.get("from", "")), str(body.get("body", "")))
+            return self.reply(200, {"ok": True})
+        m = re.fullmatch(r"/texts/([0-9a-f]+)", self.path)
+        if m:  # the bridge reporting on a text message
+            with G.lock:
+                pending = G.texts.get(m.group(1))
+            if pending:
+                pending["status"] = body.get("status")
+                pending["done"].set()
+            return self.reply(200, {"ok": True}) if pending else self.reply(404, {"error": "no such text"})
         m = re.fullmatch(r"/calls/([0-9a-f]+)/status", self.path)
         if m:
             status = body.get("status")
@@ -434,6 +601,7 @@ class Handler(BaseHTTPRequestHandler):
             item = {"id": uuid.uuid4().hex[:12], "from": key, "label": G.label(key),
                     "text": re.sub(r"\s+", " ", text).strip()[:MAX_TEXT], "at": time.time(), "heard": False}
             G.vm_save("inbox", item)
+            G.notify_now.set()
             log.info("voicemail %s from %s: %r", item["id"], key, item["text"][:80])
             return self.reply(200, {"id": item["id"]})
         m = re.fullmatch(r"/voicemail/to/([A-Za-z0-9_-]+)", self.path)
@@ -608,6 +776,8 @@ def run():
         log.warning("no token set: any allowed address can use the gateway")
     threading.Thread(target=G.vm_deliver_loop, daemon=True).start()
     G.vm_deliver.set()  # anything left pending from before a restart
+    threading.Thread(target=G.notify_loop, daemon=True).start()
+    G.notify_now.set()
     server = Server((c["host"], c["port"]))
     log.info("listening on %s://%s:%d, allowed %s", "https" if c.get("tls_cert") else "http",
              c["host"], c["port"], " ".join(c["allowed"]))

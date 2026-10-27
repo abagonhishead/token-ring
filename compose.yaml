@@ -3,7 +3,8 @@
 #
 # Before the first start:
 #   mkdir -p secrets && openssl rand -hex 32 > secrets/token
-#   write secrets/pjsip_auth.conf (see asterisk/pjsip.conf) and config.toml (from config.example.toml)
+#   write secrets/pjsip_auth.conf (see asterisk/pjsip.conf), secrets/manager_auth.conf (see
+#   asterisk/manager.conf) and config.toml (from config.example.toml)
 #   the containers run as uid and gid 1000: chown 1000:1000 secrets/* && chmod 640 secrets/*
 #
 #   docker compose up -d                          Asterisk, the bridge and Piper
@@ -29,6 +30,7 @@ services:
       - astdb:/var/lib/asterisk/db
     secrets:
       - pjsip_auth.conf
+      - manager_auth.conf
 
   bridge:
     image: token-ring-bridge
@@ -40,6 +42,7 @@ services:
       - ./config.toml:/etc/token-ring/config.toml:ro
     secrets:
       - token
+      - manager_auth.conf
 
   piper:
     image: token-ring-piper
@@ -106,3 +109,5 @@ secrets:
     file: ./secrets/token
   pjsip_auth.conf:
     file: ./secrets/pjsip_auth.conf
+  manager_auth.conf:
+    file: ./secrets/manager_auth.conf

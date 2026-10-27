@@ -30,6 +30,12 @@ DEFAULTS = {
         "gateway_ca_file": "",         # CA bundle for an https gateway_url with a private CA
         "answer_wait_seconds": 4.0,    # calls from a session: wait this long for a hello
         "pip_every_seconds": 3.0,      # soft pip while the session works in silence
+        "ami_host": "127.0.0.1",       # Asterisk's manager interface, for text messages
+        "ami_port": 5038,
+        "ami_user": "token-ring",
+        "ami_secret": "",              # or ami_secret_file (a manager.conf section with secret =)
+        "ami_secret_file": "/run/secrets/manager_auth.conf",
+        "text_from": "201",            # who texts appear to come from
     },
     "gateway": {
         "host": "127.0.0.1",
@@ -55,6 +61,7 @@ DEFAULTS = {
         "interrupt": ["cancel that"],
     }},
     "pronunciations": {},
+    "notify": {"via": [], "remind_every_minutes": 60, "preview": True, "preview_chars": 160, "ntfy": {}},
 }
 
 

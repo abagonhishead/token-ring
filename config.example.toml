@@ -26,6 +26,9 @@ ring_seconds = 30
 gateway_url = "http://127.0.0.1:9096"
 gateway_token_file = "/run/secrets/token"   # or gateway_token = "...", or $TOKEN_RING_TOKEN
 gateway_ca_file = ""           # CA bundle, for an https gateway_url with a private CA
+ami_user = "token-ring"         # Asterisk's manager interface, for text messages ([notify])
+ami_secret_file = "/run/secrets/manager_auth.conf"   # the manager.conf section with its secret
+text_from = "201"              # who texts appear to come from
 answer_wait_seconds = 4.0      # calls from sessions: wait this long for a "hello"
 pip_every_seconds = 3.0        # soft pip while a session works in silence
 
@@ -113,6 +116,18 @@ model = "/opt/vosk/model"      # a Vosk model directory
 [keywords.phrases]
 stop = ["stop", "hang on", "wait", "shush", "quiet"]   # stop speaking
 interrupt = ["cancel that"]    # stop speaking and interrupt the current turn
+
+# Telling the user about voicemail: when a session leaves one, and then every
+# remind_every_minutes while any is unheard. A notification is only counted as sent once it's
+# delivered (for "phone": the phone is registered and reachable), so one waits rather than
+# several piling up; reminders stop once they've listened, or replied to the text.
+[notify]
+via = []                       # "phone" (a text message, through Asterisk), "ntfy"
+remind_every_minutes = 60      # 0: no reminders
+preview = true                 # include the start of the message
+[notify.ntfy]
+# url = "https://ntfy.sh/your-secret-topic"   # or your own ntfy server
+# token_env = "NTFY_TOKEN"
 
 # Respellings for words the TTS gets wrong: whole words, case-insensitive.
 [pronunciations]

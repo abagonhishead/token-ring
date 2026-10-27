@@ -1,6 +1,7 @@
 """The bridge and the gateway together, with the echo backend, canned speech-to-text and beeps
 for speech: a fake Asterisk rings the bridge over AudioSocket."""
 import asyncio
+import base64
 import json
 import os
 import socket
@@ -22,7 +23,7 @@ def free_port():
 
 @pytest.fixture
 def system(conf, tmp_path, monkeypatch):
-    ports = {k: free_port() for k in ("gw", "echo", "op", "vm")}
+    ports = {k: free_port() for k in ("gw", "echo", "op", "vm", "ami")}
     (tmp_path / "spool").mkdir()
     conf(f"""
 [user]
@@ -37,6 +38,11 @@ spool = "{tmp_path}/spool"
 staging = "{tmp_path}/staging"
 answer_wait_seconds = 0.3
 voicemail_extension = "201"
+ami_port = {ports['ami']}
+ami_secret = "amisecret"
+[notify]
+via = ["phone"]
+remind_every_minutes = 0.02
 [gateway]
 port = {ports['gw']}
 token = "secret"
@@ -212,4 +218,77 @@ def test_voicemail_and_outbound(system):
             await until(said_has(said, "All done."))
         assert gw(ports, "GET", f"/calls/{call['id']}")["status"] == "answered"
         loop_task.cancel()
+    asyncio.run(main())
+
+
+class FakeAMI:
+    """Enough of Asterisk's manager interface for texts: logins, "pjsip show contacts",
+    MessageSend, and UserEvents for texts from the phone."""
+
+    def __init__(self):
+        self.reachable = False
+        self.sent = []
+        self.listeners = []
+
+    async def handle(self, reader, writer):
+        writer.write(b"Asterisk Call Manager/9.0.0\r\n")
+        try:
+            while True:
+                msg = await bridge.ami_read(reader)
+                action = msg.get("Action")
+                if action == "Login":
+                    ok = msg.get("Secret") == "amisecret"
+                    writer.write(b"Response: Success\r\n\r\n" if ok else b"Response: Error\r\nMessage: Authentication failed\r\n\r\n")
+                    if ok and msg.get("Events") == "user":
+                        self.listeners.append(writer)
+                elif action == "Command":
+                    contact = (b"Output:  Contact:  100/sip:100@10.0.0.5:5060  1a2b3c  Avail  12.3\r\n"
+                               if self.reachable else b"Output: No objects found.\r\n")
+                    writer.write(b"Response: Success\r\nMessage: Command output follows\r\n" + contact + b"\r\n")
+                elif action == "MessageSend":
+                    self.sent.append(base64.b64decode(msg["Base64Body"]).decode())
+                    writer.write(b"Response: Success\r\nMessage: Message successfully sent\r\n\r\n")
+                elif action == "Logoff":
+                    writer.close()
+                    return
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+
+    def text_from_phone(self, body):
+        for w in self.listeners:
+            w.write(("Event: UserEvent\r\nUserEvent: TokenRingText\r\nFrom: <sip:100@10.0.0.5>\r\n"
+                     f"To: 201\r\nBody: {base64.b64encode(body.encode()).decode()}\r\n\r\n").encode())
+
+
+def test_voicemail_texts(system, monkeypatch):
+    ports, said, tmp = system
+    monkeypatch.setattr(gateway, "NOTIFY_RETRY_S", 0.2)
+    ami = FakeAMI()
+
+    async def main():
+        await asyncio.start_server(ami.handle, "127.0.0.1", ports["ami"])
+        tasks = [asyncio.create_task(bridge.outbound_loop()), asyncio.create_task(bridge.text_replies_loop())]
+        threading.Thread(target=gateway.G.notify_loop, daemon=True).start()
+        await until(lambda: gateway.G.outbound and ami.listeners, timeout=5)
+
+        gw(ports, "POST", "/voicemail", {"key": "beta", "message": "The build passed."})
+        await asyncio.sleep(1)
+        assert ami.sent == []  # the phone isn't there: the notification waits
+        ami.reachable = True
+        await until(lambda: ami.sent)
+        assert ami.sent[0] == "New voicemail from beta: The build passed. Dial 201 to listen."
+        await until(lambda: len(ami.sent) >= 2)  # unheard: a reminder
+        assert ami.sent[1] == "You have 1 new voicemail, from beta. Dial 201 to listen."
+
+        ami.text_from_phone("ok")  # read it: no more reminders
+        await asyncio.sleep(0.5)
+        count = len(ami.sent)
+        await asyncio.sleep(2)
+        assert len(ami.sent) == count
+
+        gw(ports, "POST", "/voicemail", {"key": "alpha", "message": "Deploy finished."})
+        await until(lambda: any("from alpha: Deploy finished." in t for t in ami.sent))
+        for t in tasks:
+            t.cancel()
     asyncio.run(main())

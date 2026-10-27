@@ -56,7 +56,8 @@ In a session:
 - Once you're in a session you stay there; hang up and call again for the operator.
 
 Sessions ring you with `token-ring call "message"` and leave voicemail with `token-ring voicemail
-"message"`. When you answer, you hear the message and you're talking to the session that rang.
+"message"`. With `[notify]`, a new voicemail also sends a text message to your phone
+(or an ntfy notification), with a reminder every hour while it's unheard. When you answer, you hear the message and you're talking to the session that rang.
 `docs/agents.md` is what to tell your agents about it.
 
 ## Quick start (containers)
@@ -68,6 +69,7 @@ over your LAN or a VPN such as WireGuard rather than exposing SIP to the interne
 git clone https://github.com/abagonhishead/token-ring && cd token-ring
 cp config.example.toml config.toml        # then edit it: [user], [stt], [voices], [backends]
 mkdir -p secrets && openssl rand -hex 32 > secrets/token
+printf '[token-ring]\nsecret = %s\nread = user\nwrite = message,command\n' "$(openssl rand -hex 24)" > secrets/manager_auth.conf
 cat > secrets/pjsip_auth.conf <<'END'
 [100](auth-template)
 username = 100
@@ -202,6 +204,7 @@ name.
 | `systemd/` | Units for running the gateway or bridge on the host instead |
 | `extras/hailo-stt/` | Whisper on a Hailo-10H accelerator, as an `http` speech-to-text server |
 | `tests/` | `pytest`: unit tests, and the bridge and gateway end to end with a fake Asterisk |
+| `ROADMAP.md` | What's next: a web UI, encrypted calls, texting sessions, ... |
 
 ## Licence
 

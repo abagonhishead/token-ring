@@ -25,6 +25,7 @@ Speech is transcribed by the [stt] engine and every phrase is synthesised live b
 AudioSocket framing: 1 byte kind, 2 bytes big-endian length, payload.
 """
 import asyncio
+import base64
 import logging
 import os
 import re
@@ -105,7 +106,10 @@ async def outbound_loop():
         done = asyncio.Event()
 
         def emit(ev):
-            loop.call_soon_threadsafe(on_outbound, ev, done)
+            try:
+                loop.call_soon_threadsafe(on_outbound, ev, done)
+            except RuntimeError:  # the loop has closed (shutting down)
+                stop.set()
         threading.Thread(target=gateway().follow, args=("/outbound", emit, stop, log), daemon=True).start()
         await done.wait()  # the stream dropped: reconnect
         await asyncio.sleep(10)
@@ -114,6 +118,8 @@ async def outbound_loop():
 def on_outbound(ev, done):
     if "lost" in ev:
         done.set()
+    elif "text" in ev:
+        asyncio.create_task(send_text(ev["id"], ev["text"]))
     elif "call" in ev:
         call_id = ev["call"]
         try:
@@ -130,6 +136,117 @@ def on_outbound(ev, done):
                 log.info("outbound %s: no answer", call_id)
                 asyncio.create_task(report(call_id, "no answer"))
         asyncio.get_running_loop().call_later(bridge_conf()["ring_seconds"] + 15, unanswered)
+
+
+# Text messages to the phone, through Asterisk's manager interface (AMI): only sent while the
+# phone is registered and reachable, since Asterisk keeps no messages for later and doesn't say
+# whether a phone took one. The user's texts back come in as UserEvents from the
+# [token-ring-messages] dialplan context.
+
+def ami_secret():
+    c = bridge_conf()
+    raw = config.secret({"secret": c.get("ami_secret"), "secret_file": c.get("ami_secret_file")}, "secret")
+    m = re.search(r"^\s*secret\s*=\s*(\S+)", raw, re.M)
+    return m.group(1) if m else raw.strip()
+
+
+async def ami_read(reader):
+    """One AMI message: {field: value}, with command output lines in "Output" (a list)."""
+    msg = {"Output": []}
+    while True:
+        line = (await reader.readline()).decode(errors="replace")
+        if not line:
+            raise ConnectionError("AMI connection closed")
+        line = line.rstrip("\r\n")
+        if not line:
+            if len(msg) > 1 or msg["Output"]:
+                return msg
+            continue
+        key, _, value = line.partition(": ")
+        if key == "Output":
+            msg["Output"].append(value)
+        else:
+            msg[key] = value
+
+
+async def ami_connect(events="off"):
+    c = bridge_conf()
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(c["ami_host"], c["ami_port"]), 5)
+    await reader.readline()  # "Asterisk Call Manager/..."
+    ami_send(writer, {"Action": "Login", "Username": c["ami_user"], "Secret": ami_secret(), "Events": events})
+    resp = await asyncio.wait_for(ami_read(reader), 5)
+    if resp.get("Response") != "Success":
+        writer.close()
+        raise PermissionError(resp.get("Message", "AMI login failed"))
+    return reader, writer
+
+
+def ami_send(writer, fields):
+    writer.write("".join(f"{k}: {v}\r\n" for k, v in fields.items()).encode() + b"\r\n")
+
+
+async def ami_action(fields):
+    reader, writer = await ami_connect()
+    try:
+        ami_send(writer, fields)
+        return await asyncio.wait_for(ami_read(reader), 10)
+    finally:
+        ami_send(writer, {"Action": "Logoff"})
+        writer.close()
+
+
+async def reachable(endpoint):
+    """Whether a PJSIP endpoint has a registered contact that answers its qualify checks."""
+    out = (await ami_action({"Action": "Command", "Command": "pjsip show contacts"}))["Output"]
+    return any(re.match(rf"\s*Contact:\s+{re.escape(endpoint)}/\S+\s+\S+\s+(Avail|NonQual)\b", l) for l in out)
+
+
+async def send_text(text_id, text):
+    phone = bridge_conf()["phone"]
+    status = "failed"
+    try:
+        tech, _, endpoint = phone.partition("/")
+        if tech.upper() != "PJSIP":
+            raise ValueError(f"texts need a PJSIP phone, not {phone}")
+        if not await reachable(endpoint):
+            status = "unreachable"
+        else:
+            resp = await ami_action({"Action": "MessageSend", "To": f"pjsip:{endpoint}",
+                                     "From": bridge_conf()["text_from"],
+                                     "Base64Body": base64.b64encode(text.encode()).decode()})
+            status = "sent" if resp.get("Response") == "Success" else "failed"
+            if status == "failed":
+                log.warning("text %s: %s", text_id, resp.get("Message"))
+    except Exception as e:
+        log.warning("text %s: %s", text_id, e)
+    log.info("text %s to %s: %s", text_id, phone, status)
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, gateway().call, "POST", f"/texts/{text_id}", {"status": status})
+    except Exception as e:
+        log.warning("text %s: couldn't report %s: %s", text_id, status, e)
+
+
+async def text_replies_loop():
+    """Pass the user's texts to the PBX on to the gateway, for as long as the bridge runs."""
+    warned = False
+    while True:
+        try:
+            reader, writer = await ami_connect(events="user")
+            log.info("listening for texts (AMI)")
+            warned = False
+            while True:
+                ev = await ami_read(reader)
+                if ev.get("Event") == "UserEvent" and ev.get("UserEvent") == "TokenRingText":
+                    body = base64.b64decode(ev.get("Body", "")).decode(errors="replace")
+                    log.info("text from %s to %s: %r", ev.get("From"), ev.get("To"), body[:80])
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, gateway().call, "POST", "/texts/reply", {"from": ev.get("From", ""), "body": body})
+        except Exception as e:
+            if not warned:
+                log.warning("texts: no AMI connection (%s); retrying", e)
+                warned = True
+        await asyncio.sleep(10)
 
 
 async def report(call_id, status):
@@ -385,7 +502,10 @@ class Operator(Call):
         stop = threading.Event()
 
         def emit(ev):
-            loop.call_soon_threadsafe(self.on_event, key, stop, ev)
+            try:
+                loop.call_soon_threadsafe(self.on_event, key, stop, ev)
+            except RuntimeError:  # the loop has closed (shutting down)
+                stop.set()
         threading.Thread(target=gateway().follow, args=(path, emit, stop, log), daemon=True).start()
         return stop
 
@@ -949,7 +1069,7 @@ async def main():
              c["host"], c["echo_port"], c["operator_port"], c["voicemail_port"], voice_for("operator"),
              stt.get().describe(), c["gateway_url"])
     threading.Thread(target=tts.preload, daemon=True).start()
-    await asyncio.gather(*(srv.serve_forever() for srv in servers), outbound_loop())
+    await asyncio.gather(*(srv.serve_forever() for srv in servers), outbound_loop(), text_replies_loop())
 
 
 def run():
