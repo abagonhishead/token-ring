@@ -4,10 +4,10 @@ Ideas and known gaps, roughly in order of how much they'd help. Nothing here is 
 
 ## Next
 
-- **Web UI.** One page for everything that's a config file or a log today: the sessions and
+- **More of the web page.** The PBX page (token-ring-web) shows what's connected, the logs and the
+  configuration. Still to come: a login, then the AI side served by the gateway: the sessions and
   their status, voicemail (read, play, reply, delete), outbound calls and texts, recent calls with
-  transcripts, and settings: voices (with samples), trigger words, pronunciations,
-  speech-to-text and text-to-speech engines. Served by the gateway, behind its token.
+  transcripts, and voice samples.
 - **Texting sessions.** Text a session directly from the phone's chat (SIP MESSAGE) instead of
   calling: the replies come back as texts, multiple-choice questions as numbered lists. Sessions
   can text you with `token-ring text`. Texting the operator (200) already works, and asks
