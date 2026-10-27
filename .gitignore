@@ -1,0 +1,14 @@
+__pycache__/
+*.egg-info/
+.venv/
+/site/
+*.pyc
+secrets/
+config.toml
+.env
+*.swp
+*~
+CLAUDE.md
+.claude/
+build/
+.pytest_cache/

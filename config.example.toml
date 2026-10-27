@@ -1,0 +1,120 @@
+# token-ring configuration. One file for every part: the bridge (beside Asterisk) reads
+# [bridge], [stt], [tts], [voices], [keywords] and [pronunciations]; the gateway (beside the AI)
+# and the `token-ring` command read [user], [gateway] and [backends]. Use the same file on both
+# machines, or just the sections each needs.
+#
+# Where it's read from: $TOKEN_RING_CONFIG, else ~/.config/token-ring/config.toml, else
+# /etc/token-ring/config.toml. Changes apply without a restart: voices, keywords and
+# pronunciations from the next phrase, everything else from the next call (ports and the
+# gateway's address excepted).
+
+[user]
+name = "the caller"            # how the AI refers to you ("You're talking to Sam on the phone")
+
+[bridge]
+host = "127.0.0.1"             # where Asterisk's AudioSocket connects (extensions.conf)
+echo_port = 9093               # speech echo test (601)
+operator_port = 9094           # the AI (200), and calls from sessions
+voicemail_port = 9097          # voicemail (201)
+voicemail_extension = "201"    # said when there's new voicemail ("" to not say how)
+phone = "PJSIP/100"            # what calls from sessions ring
+caller_id = "Claude"           # their caller ID is "<this>: <session>" (the gateway's backend
+                               # names the AI, if it says)
+spool = "/var/spool/asterisk/outgoing"
+staging = "/var/spool/asterisk/token-ring"  # must be on the same filesystem as spool
+ring_seconds = 30
+gateway_url = "http://127.0.0.1:9096"
+gateway_token_file = "/run/secrets/token"   # or gateway_token = "...", or $TOKEN_RING_TOKEN
+gateway_ca_file = ""           # CA bundle, for an https gateway_url with a private CA
+answer_wait_seconds = 4.0      # calls from sessions: wait this long for a "hello"
+pip_every_seconds = 3.0        # soft pip while a session works in silence
+
+[gateway]
+host = "127.0.0.1"             # 0.0.0.0 if the bridge is on another machine
+port = 9096
+allowed = ["127.0.0.0/8", "::1/128"]   # add the bridge's address if it's elsewhere
+token_file = "~/.config/token-ring/token"   # shared with the bridge; or token = "..."
+tls_cert = ""                  # both set: HTTPS (reloaded when renewed)
+tls_key = ""
+data_dir = "~/.local/share/token-ring"      # voicemail, the operator's directory
+call_gap_seconds = 120         # a session may ring at most this often
+backend = "claude-code"        # a [backends.<name>] below, a plugin, or "module:Class"
+operator_prompt = ""           # added to the operator's instructions (what else it looks after)
+session_prompt = ""            # added to new phone conversations' instructions
+[gateway.labels]               # how session keys are said, where the key doesn't say it well
+# rc = "general use"
+
+[backends.claude-code]
+command = ["claude"]
+permission_mode = "default"    # for phone conversations (the operator, new conversations)
+model = ""                     # "" = Claude Code's default
+directories = []               # sessions by directory, e.g. ["~/repos/app"] (key: "app")
+directories_file = ""          # and/or a JSON file {"directories": ["path" | {"path": ...}]}
+discover = true                # also any interactive Claude Code session running in tmux
+terminal_hint = "Answer it at the terminal or in the Claude app."  # for permission prompts
+
+[backends.echo]                # no AI: says back what it's sent (to try the phone side)
+sessions = ["alpha", "beta"]
+
+# Speech-to-text. engine: "openai" (any server with OpenAI's transcription API), "http" (raw
+# PCM in, {"text"} out), "command", "vosk" (offline, in the bridge; less accurate), a plugin,
+# or "module:Class".
+[stt]
+engine = "openai"
+url = "http://127.0.0.1:8000/v1"           # speaches (compose profile "stt"); OpenAI: https://api.openai.com/v1
+model = "Systran/faster-whisper-small.en"
+api_key_env = "OPENAI_API_KEY"             # environment variable holding a key, if one's needed
+language = "en"
+# prompt = "Claude, tmux, Kubernetes"      # words to expect
+
+# Text-to-speech engines, by name. A voice is "<engine>/<voice>"; without "<engine>/" it uses
+# default. Types: "piper" (Piper's HTTP server: docker/piper), "openai" (any server with
+# OpenAI's speech API: OpenAI, Kokoro-FastAPI, speaches), "command", a plugin, or
+# "module:Class".
+[tts]
+default = "piper"
+
+[tts.engines.piper]
+type = "piper"
+url = "http://127.0.0.1:5000"
+voice = "en_GB-alan-medium"
+noise_scale = 0.333            # lower than Piper's defaults: steadier, less variable speech
+noise_w = 0.333
+
+# [tts.engines.kokoro]
+# type = "openai"
+# url = "http://127.0.0.1:8880/v1"
+# model = "kokoro"
+# voice = "bf_emma"
+
+# [tts.engines.openai]
+# type = "openai"
+# model = "gpt-4o-mini-tts"
+# voice = "fable"
+# api_key_env = "OPENAI_API_KEY"
+
+# Who speaks in which voice.
+[voices]
+operator = "piper/en_GB-alan-medium"       # the operator, and everything the PBX says
+pool = []                      # sessions get one of these, picked by hashing the session's key
+                               # (the same voice every call); empty: the operator's voice
+rate = 1.0                     # speaking rate: 1 is the voice's own pace, 1.2 is 20% faster
+[voices.sessions]              # voices pinned to sessions
+# my-project = "piper/en_GB-semaine-medium:poppy"
+[voices.names]                 # voices with these names introduce themselves ("Hi, it's Poppy.")
+# "piper/en_GB-semaine-medium:poppy" = "Poppy"
+[voices.rates]                 # per voice, or per model ("piper/en_GB-semaine-medium")
+# "piper/en_GB-alan-medium" = 1.1
+
+# Trigger words, heard while the AI is speaking (barge-in). The keypad's * works either way.
+[keywords]
+engine = "vosk"                # built into the bridge image; "off" to switch off
+model = "/opt/vosk/model"      # a Vosk model directory
+[keywords.phrases]
+stop = ["stop", "hang on", "wait", "shush", "quiet"]   # stop speaking
+interrupt = ["cancel that"]    # stop speaking and interrupt the current turn
+
+# Respellings for words the TTS gets wrong: whole words, case-insensitive.
+[pronunciations]
+tmux = "tee mux"
+SSH = "S S H"

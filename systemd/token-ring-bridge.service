@@ -1,0 +1,20 @@
+# The bridge as a system service, for running it on the host beside Asterisk (rather than in
+# the bridge container). Install token-ring with the bridge extra into a virtualenv
+# (pip install "/path/to/token-ring[bridge,vosk]"), set User and the paths below, and make sure
+# the user can write to Asterisk's spool (e.g. add it to the asterisk group).
+[Unit]
+Description=token-ring bridge: speech for Asterisk over AudioSocket
+After=network.target
+Before=asterisk.service
+
+[Service]
+User=token-ring
+Group=asterisk
+ExecStart=/opt/token-ring/venv/bin/token-ring-bridge
+Environment=TOKEN_RING_CONFIG=/etc/token-ring/config.toml
+Restart=on-failure
+RestartSec=3
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

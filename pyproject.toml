@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "token-ring"
+version = "0.1.0"
+description = "Talk to AI agents on the phone: an Asterisk bridge with pluggable speech-to-text, text-to-speech and AI backends"
+readme = "README.md"
+license = "MPL-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# The bridge (beside Asterisk); the gateway and the token-ring command need nothing extra
+bridge = ["numpy", "soxr"]
+vosk = ["vosk"]
+test = ["pytest"]
+
+[project.scripts]
+token-ring = "token_ring.cli:main"
+token-ring-bridge = "token_ring.bridge:run"
+token-ring-gateway = "token_ring.gateway:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

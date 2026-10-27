@@ -1,0 +1,106 @@
+# token-ring in containers. Everything uses host networking: SIP and RTP need it, and the bridge
+# reaches Asterisk, the speech engines and the gateway on 127.0.0.1.
+#
+# Before the first start:
+#   mkdir -p secrets && openssl rand -hex 32 > secrets/token
+#   write secrets/pjsip_auth.conf (see asterisk/pjsip.conf) and config.toml (from config.example.toml)
+#   the containers run as uid and gid 1000: chown 1000:1000 secrets/* && chmod 640 secrets/*
+#
+#   docker compose up -d                          Asterisk, the bridge and Piper
+#   docker compose --profile stt up -d            ... plus speaches for speech-to-text
+#   docker compose --profile kokoro up -d         ... plus Kokoro text-to-speech
+#   docker compose --profile gateway up -d        ... plus the gateway, for an all-in-one machine
+#
+# Speech-to-text isn't in the default set: point [stt] at a server you already have (OpenAI,
+# Groq, a GPU box), or add the stt profile.
+
+x-build: &build
+  context: .
+  network: host
+
+services:
+  asterisk:
+    image: token-ring-asterisk
+    build: { <<: *build, dockerfile: docker/asterisk/Dockerfile }
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - spool:/var/spool/asterisk
+    secrets:
+      - pjsip_auth.conf
+
+  bridge:
+    image: token-ring-bridge
+    build: { <<: *build, dockerfile: docker/bridge/Dockerfile }
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - spool:/var/spool/asterisk
+      - ./config.toml:/etc/token-ring/config.toml:ro
+    secrets:
+      - token
+
+  piper:
+    image: token-ring-piper
+    build:
+      <<: *build
+      dockerfile: docker/piper/Dockerfile
+      args:
+        VOICES: en_GB-alan-medium
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      DEFAULT_VOICE: en_GB-alan-medium
+
+  speaches:
+    profiles: [stt]
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      UVICORN_HOST: 127.0.0.1
+      UVICORN_PORT: "8000"
+      PRELOAD_MODELS: '["Systran/faster-whisper-small.en"]'
+    volumes:
+      - hf-cache:/home/ubuntu/.cache/huggingface/hub
+
+  kokoro:
+    profiles: [kokoro]
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    network_mode: host
+    restart: unless-stopped
+
+  # The gateway with Claude Code. To reach Claude Code sessions in tmux on this machine it runs
+  # as you, sees the host's processes, your home directory (same path: transcripts and project
+  # paths must match) and your tmux sockets. Set UID, GID and HOME in .env (or the environment).
+  gateway:
+    profiles: [gateway]
+    image: token-ring-gateway
+    build:
+      <<: *build
+      dockerfile: docker/gateway/Dockerfile
+      args:
+        UID: ${UID:-1000}
+    network_mode: host
+    pid: host
+    user: "${UID:-1000}:${GID:-1000}"
+    restart: unless-stopped
+    environment:
+      HOME: ${HOME}
+      TOKEN_RING_CONFIG: /etc/token-ring/config.toml
+    volumes:
+      - ./config.toml:/etc/token-ring/config.toml:ro
+      - ${HOME}:${HOME}
+      - /tmp/tmux-${UID:-1000}:/tmp/tmux-${UID:-1000}
+    secrets:
+      - token
+
+volumes:
+  spool:
+  hf-cache:
+
+secrets:
+  token:
+    file: ./secrets/token
+  pjsip_auth.conf:
+    file: ./secrets/pjsip_auth.conf
