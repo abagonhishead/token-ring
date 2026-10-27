@@ -57,6 +57,21 @@ services:
     environment:
       DEFAULT_VOICE: en_GB-alan-medium
 
+  # Set up a phone: docker compose run --rm provision 100 (a new password for 100, and a one-time
+  # link that hands its settings to Linphone). Root, to write the passwords file.
+  provision:
+    profiles: [tools]
+    image: token-ring-bridge
+    network_mode: host
+    user: "0"
+    entrypoint: ["token-ring-provision"]
+    volumes:
+      - ./config.toml:/etc/token-ring/config.toml:ro
+      - ./secrets/pjsip_auth.conf:/secrets/pjsip_auth.conf
+      - ./tls:/tls:ro
+    secrets:
+      - manager_auth.conf
+
   speaches:
     profiles: [stt]
     image: ghcr.io/speaches-ai/speaches:latest-cpu

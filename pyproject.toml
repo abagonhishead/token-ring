@@ -22,6 +22,7 @@ test = ["pytest"]
 token-ring = "token_ring.cli:main"
 token-ring-bridge = "token_ring.bridge:run"
 token-ring-gateway = "token_ring.gateway:run"
+token-ring-provision = "token_ring.provision:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

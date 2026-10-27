@@ -63,6 +63,19 @@ DEFAULTS = {
     }},
     "pronunciations": {},
     "notify": {"via": [], "remind_every_minutes": 60, "preview": True, "preview_chars": 160, "ntfy": {}},
+    "provision": {
+        "name": "",                    # the host name phones register to (in the certificate)
+        "sip_port": 5061,
+        "transport": "tls",
+        "media_encryption": "srtp",    # "" to leave the phone's setting alone
+        "media_encryption_mandatory": True,
+        "listen": "0.0.0.0",
+        "port": 9443,
+        "cert_file": "/tls/fullchain.pem",
+        "key_file": "/tls/privkey.pem",
+        "auth_file": "/secrets/pjsip_auth.conf",
+        "wait_minutes": 10,
+    },
 }
 
 

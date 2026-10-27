@@ -129,6 +129,20 @@ preview = true                 # include the start of the message
 # url = "https://ntfy.sh/your-secret-topic"   # or your own ntfy server
 # token_env = "NTFY_TOKEN"
 
+# Setting up a phone by remote provisioning (Linphone): `token-ring-provision 100` gives 100 a new
+# password and serves its settings once over HTTPS (docker compose run --rm provision 100).
+[provision]
+name = ""                      # the host name phones register to, which the certificate is for
+sip_port = 5061
+transport = "tls"              # "tcp" or "udp" without a certificate for Asterisk
+media_encryption = "srtp"      # with TLS; "" to leave the phone's setting alone
+media_encryption_mandatory = true
+port = 9443                    # where the settings are served, once (HTTPS)
+cert_file = "/tls/fullchain.pem"           # a certificate for name, and its key
+key_file = "/tls/privkey.pem"
+auth_file = "/secrets/pjsip_auth.conf"     # the extensions' passwords (written to)
+wait_minutes = 10
+
 # Respellings for words the TTS gets wrong: whole words, case-insensitive.
 [pronunciations]
 tmux = "tee mux"
