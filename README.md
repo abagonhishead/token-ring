@@ -182,6 +182,20 @@ name.
   backend keeps; `backends/echo.py` is a complete small example, `backends/claude_code.py` the
   real thing.
 
+### Call apps
+
+Your own phone apps, beside the operator and voicemail: a subclass of `token_ring.bridge.Call`
+(speech, the keypad, hang-up), served on its own port, with an optional background task (a
+classmethod or staticmethod `background(conf)`) that can ring the phone with
+`token_ring.bridge.ring_app()`, through Asterisk's manager interface (its login needs `write =
+originate`). Answered calls reach the app through the `[token-ring-app]` dialplan context.
+
+```toml
+[bridge.apps.alarm]
+port = 9098
+class = "my_alarm:AlarmCall"     # importable in the bridge (add it to your bridge image)
+```
+
 ## Security
 
 - The AI can run commands, so only trusted extensions may dial it: `extensions.conf` lets only

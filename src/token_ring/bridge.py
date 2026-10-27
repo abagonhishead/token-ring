@@ -33,7 +33,7 @@ import threading
 import time
 import uuid
 
-from . import config, spotter, stt, tts
+from . import config, plugins, spotter, stt, tts
 from .audio import FRAME_BYTES, FRAME_MS, RATE, frame_db, tone
 from .http import Client
 from .text import match_session, pronounce, speakable, spoken_when
@@ -185,11 +185,11 @@ def ami_send(writer, fields):
     writer.write("".join(f"{k}: {v}\r\n" for k, v in fields.items()).encode() + b"\r\n")
 
 
-async def ami_action(fields):
+async def ami_action(fields, timeout=10):
     reader, writer = await ami_connect()
     try:
         ami_send(writer, fields)
-        return await asyncio.wait_for(ami_read(reader), 10)
+        return await asyncio.wait_for(ami_read(reader), timeout)
     finally:
         ami_send(writer, {"Action": "Logoff"})
         writer.close()
@@ -248,6 +248,19 @@ async def text_replies_loop():
                 log.warning("texts: no AMI connection (%s); retrying", e)
                 warned = True
         await asyncio.sleep(10)
+
+
+async def ring_app(port, caller_id, ring_seconds=30, call_uuid=None):
+    """Ring the phone for a call app ([bridge.apps]): returns the AudioSocket UUID the call will
+    arrive on the app's port with if it was answered, or None (no answer, busy, rejected). Waits
+    for the outcome (Asterisk reports it as soon as it's known)."""
+    phone = bridge_conf()["phone"]
+    call_uuid = call_uuid or str(uuid.uuid4())
+    resp = await ami_action({"Action": "Originate", "Channel": phone, "Context": "token-ring-app",
+                             "Exten": "s", "Priority": "1", "Timeout": str(ring_seconds * 1000),
+                             "CallerID": caller_id, "Async": "false",
+                             "Variable": f"TRUUID={call_uuid},TRPORT={port}"}, timeout=ring_seconds + 15)
+    return call_uuid if resp.get("Response") == "Success" else None
 
 
 async def report(call_id, status):
@@ -409,6 +422,21 @@ class Call:
 
     async def on_end(self):
         pass
+
+    async def finish_speaking(self):
+        """Wait until everything queued has been said."""
+        await asyncio.sleep(0.05)
+        while self.talking:
+            await asyncio.sleep(0.05)
+
+    async def hangup(self):
+        """End the call once what's queued has been said."""
+        await self.finish_speaking()
+        await asyncio.sleep(0.5)
+        try:
+            await self.send(KIND_HANGUP)
+        finally:
+            self.writer.close()
 
     async def run(self):
         speaker = asyncio.create_task(self.speaker())
@@ -720,15 +748,6 @@ class Operator(Call):
         where = dialog.get("answer_at") or "That needs answering at the session's terminal."
         self.say(f"{self.label} is asking: {dialog['question']} {where} Goodbye.", "dialog")
         await self.hangup()
-
-    async def hangup(self):
-        while self.talking:
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
-        try:
-            await self.send(KIND_HANGUP)
-        finally:
-            self.writer.close()
 
     async def read_menu(self):
         self.hush()
@@ -1069,8 +1088,22 @@ async def main():
     log.info("listening on %s: echo %d, operator %d, voicemail %d; voice %s, STT %s, gateway %s",
              c["host"], c["echo_port"], c["operator_port"], c["voicemail_port"], voice_for("operator"),
              stt.get().describe(), c["gateway_url"])
+    tasks = [outbound_loop(), text_replies_loop()]
+    # Call apps: your own Call subclasses, each on its own port ([bridge.apps.<name>] port and
+    # class = "module:Class"), with an optional background task (async classmethod background(conf))
+    for name, app in c.get("apps", {}).items():
+        cls = plugins.load_class(app["class"])
+
+        def serve(r, w, cls=cls, app=app):
+            call = cls(r, w)
+            call.app_conf = app
+            return call.run()
+        servers.append(await asyncio.start_server(serve, c["host"], app["port"]))
+        if hasattr(cls, "background"):
+            tasks.append(cls.background(app))
+        log.info("call app %s on %d", name, app["port"])
     threading.Thread(target=tts.preload, daemon=True).start()
-    await asyncio.gather(*(srv.serve_forever() for srv in servers), outbound_loop(), text_replies_loop())
+    await asyncio.gather(*(srv.serve_forever() for srv in servers), *tasks)
 
 
 def run():

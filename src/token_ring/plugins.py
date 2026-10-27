@@ -47,3 +47,9 @@ def load(kind, name):
         raise SystemExit(f"unknown {kind} {name!r}; known: {', '.join(known)}, or module:Class")
     module, _, cls = target.partition(":")
     return getattr(importlib.import_module(module), cls)
+
+
+def load_class(target):
+    """A class named "package.module:ClassName"."""
+    module, _, cls = target.partition(":")
+    return getattr(importlib.import_module(module), cls)
