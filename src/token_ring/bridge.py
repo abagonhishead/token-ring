@@ -121,6 +121,8 @@ def on_outbound(ev, done):
         done.set()
     elif "text" in ev:
         asyncio.create_task(send_text(ev["id"], ev["text"], ev.get("from")))
+    elif "mwi" in ev:
+        asyncio.create_task(update_mwi(ev["id"], ev["mwi"].get("new", 0), ev["mwi"].get("old", 0)))
     elif "call" in ev:
         call_id = ev["call"]
         try:
@@ -230,6 +232,33 @@ async def send_text(text_id, text, sender=None):
             None, gateway().call, "POST", f"/texts/{text_id}", {"status": status})
     except Exception as e:
         log.warning("text %s: couldn't report %s: %s", text_id, status, e)
+
+
+def mailbox():
+    """The phone's mailbox for MWI: [bridge] mailbox, else <its endpoint>@token-ring (pjsip.conf's
+    mailboxes = on the endpoint)."""
+    c = bridge_conf()
+    return c.get("mailbox") or c["phone"].partition("/")[2] + "@token-ring"
+
+
+async def update_mwi(req_id, new, old):
+    """Set the voicemail light (res_mwi_external): Asterisk keeps the counts and tells the phone,
+    now and whenever it registers."""
+    status = "failed"
+    try:
+        resp = await ami_action({"Action": "MWIUpdate", "Mailbox": mailbox(),
+                                 "NewMessages": int(new), "OldMessages": int(old)})
+        status = "sent" if resp.get("Response") == "Success" else "failed"
+        if status == "failed":
+            log.warning("mwi: %s", resp.get("Message"))
+    except Exception as e:
+        log.warning("mwi: %s", e)
+    log.info("mwi %s: %d new, %d old: %s", mailbox(), new, old, status)
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, gateway().call, "POST", f"/texts/{req_id}", {"status": status})
+    except Exception as e:
+        log.warning("mwi: couldn't report %s: %s", status, e)
 
 
 async def text_replies_loop():

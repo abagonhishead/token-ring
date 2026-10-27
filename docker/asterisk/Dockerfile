@@ -19,7 +19,8 @@ RUN ./configure --with-jansson-bundled=no --with-pjproject-bundled --libdir=/usr
     && make menuselect.makeopts >/dev/null \
     && menuselect/menuselect --disable CORE-SOUNDS-EN-GSM $(for s in ${SOUNDS}; do printf -- '--enable %s ' "$s"; done) \
         --enable res_audiosocket --enable chan_audiosocket --enable app_audiosocket \
-        --enable app_echo --enable codec_g722 --disable BUILD_NATIVE menuselect.makeopts \
+        --enable app_echo --enable codec_g722 --enable res_mwi_external --enable res_mwi_external_ami \
+        --disable BUILD_NATIVE menuselect.makeopts \
     && make -j"$(nproc)" >/tmp/make.log 2>&1 || { tail -50 /tmp/make.log; exit 1; }
 RUN make install DESTDIR=/out >/tmp/install.log 2>&1 || { tail -50 /tmp/install.log; exit 1; } \
     && mkdir -p /out/etc/asterisk \

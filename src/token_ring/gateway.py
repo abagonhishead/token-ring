@@ -299,9 +299,17 @@ class Gateway:
         channels = conf.get("via", [])
         if not channels:
             return
-        unheard = [m for m in self.vm_list("inbox") if not m.get("heard")]
+        inbox = self.vm_list("inbox")
+        unheard = [m for m in inbox if not m.get("heard")]
         state = self.notify_state()
         for via in channels:
+            if via == "mwi":  # the phone's voicemail light: a state, kept by Asterisk, not a message
+                counts = [len(unheard), len(inbox) - len(unheard)]
+                st = state.setdefault(via, {})
+                if st.get("sent") != counts and self.ask_bridge({"mwi": {"new": counts[0], "old": counts[1]}}) == "sent":
+                    st["sent"] = counts
+                    self.save_notify_state(state)
+                continue
             fresh = [m for m in unheard if via not in m.get("notified", {})]
             st = state.setdefault(via, {})
             every = conf.get("remind_every_minutes", 60) * 60
@@ -437,22 +445,31 @@ class Gateway:
         log.warning("notify: unknown channel %r", via)
         return False
 
-    def text_phone(self, text, sender=None):
-        """A text message to the phone, sent by the bridge through Asterisk (from sender, else
-        [bridge] text_from). True once it's gone to a registered phone."""
-        text_id = uuid.uuid4().hex[:12]
+    def ask_bridge(self, item):
+        """Have the bridge do something through Asterisk ({"text": ...} or {"mwi": ...}) and wait
+        for it to report back on /texts/<id>. Returns its status ("sent", ...), or None."""
+        req_id = uuid.uuid4().hex[:12]
         pending = {"done": threading.Event(), "status": None}
         with self.lock:
             if not self.outbound:
-                return False
-            self.texts[text_id] = pending
+                return None
+            self.texts[req_id] = pending
             for q in self.outbound:
-                q.put({"text": text, "id": text_id, **({"from": sender} if sender else {})})
+                q.put({**item, "id": req_id})
         pending["done"].wait(TEXT_WAIT_S)
         with self.lock:
-            self.texts.pop(text_id, None)
-        log.info("text %s: %s (%r)", text_id, pending["status"] or "no reply from the bridge", text[:60])
-        return pending["status"] == "sent"
+            self.texts.pop(req_id, None)
+        log.info("%s %s: %s", "text" if "text" in item else "mwi", req_id,
+                 pending["status"] or "no reply from the bridge")
+        return pending["status"]
+
+    def text_phone(self, text, sender=None):
+        """A text message to the phone, sent by the bridge through Asterisk (from sender, else
+        [bridge] text_from). True once it's gone to a registered phone."""
+        status = self.ask_bridge({"text": text, **({"from": sender} if sender else {})})
+        if status != "sent":
+            log.info("text not sent (%s): %r", status or "no bridge", text[:60])
+        return status == "sent"
 
     def text_phone_until_sent(self, text, sender=None, give_up_s=TEXT_OPERATOR_IDLE_S):
         """text_phone, tried again every TEXT_RETRY_S while the phone's unreachable."""
@@ -742,6 +759,7 @@ class Handler(BaseHTTPRequestHandler):
                 item = json.load(f)
             item["heard"] = True
             G.vm_save("inbox", item)
+        G.notify_now.set()
         return self.reply(200, {"ok": True})
 
     def outbound(self):

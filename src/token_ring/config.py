@@ -36,6 +36,7 @@ DEFAULTS = {
         "ami_secret": "",              # or ami_secret_file (a manager.conf section with secret =)
         "ami_secret_file": "/run/secrets/manager_auth.conf",
         "text_from": "201",            # who voicemail texts appear to come from
+        "mailbox": "",                 # for the voicemail light ("": <phone's endpoint>@token-ring)
     },
     "gateway": {
         "host": "127.0.0.1",
@@ -75,6 +76,8 @@ DEFAULTS = {
         "key_file": "/tls/privkey.pem",
         "auth_file": "/secrets/pjsip_auth.conf",
         "wait_minutes": 10,
+        "voicemail": "",               # what the voicemail button dials ("": [bridge] voicemail_extension)
+        "names": {},                   # extension -> the account's display name
     },
 }
 

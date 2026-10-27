@@ -77,3 +77,9 @@ def test_serve_once():
     assert urllib.request.urlopen(f"{base}/tok/linphone.xml", timeout=2).read() == b"<config/>"
     t.join(5)
     assert result["ok"] is True
+
+
+def test_linphone_xml_name_and_voicemail():
+    e = entries(provision.linphone_xml("100", "pw", {**CONF, "names": {"100": 'My "PBX"'}}, "201"))
+    assert e["proxy_0", "reg_identity"] == '"My PBX" <sip:100@pbx.example.net>'
+    assert e["proxy_0", "voicemail_uri"] == "sip:201@pbx.example.net"

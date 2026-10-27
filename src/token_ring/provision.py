@@ -5,8 +5,9 @@
 
 Opening the link on the phone shows a button that hands the settings to Linphone, which applies
 them and forgets the address (or paste the address into Linphone's remote provisioning setting).
-The settings are the account (registrar [provision] name, its new password) and, with TLS,
-mandatory SRTP. The address works once, and for [provision] wait_minutes at most; the old
+The settings are the account (registrar [provision] name, its new password, a display name
+from [provision.names], the voicemail button dialling [bridge] voicemail_extension) and, with
+TLS, mandatory SRTP. The address works once, and for [provision] wait_minutes at most; the old
 password stops working straight away, so run it again if the phone didn't fetch it.
 
 It writes the password into [provision] auth_file (the pjsip.conf include with the extensions'
@@ -71,12 +72,17 @@ async def reload_and_check(ext, password):
     return any(re.match(rf"\s*password\s*:\s*{re.escape(password)}\s*$", l) for l in out)
 
 
-def linphone_xml(ext, password, c):
+def linphone_xml(ext, password, c, voicemail=""):
     host, transport = c["name"], c["transport"]
     proxy = f"<sip:{host}:{c['sip_port']};transport={transport}>"
+    name = c.get("names", {}).get(ext, "").replace('"', "")
+    identity = f'"{name}" <sip:{ext}@{host}>' if name else f"sip:{ext}@{host}"
     sections = {
-        "proxy_0": {"reg_proxy": proxy, "reg_route": proxy, "reg_identity": f"sip:{ext}@{host}",
-                    "reg_expires": 3600, "reg_sendregister": 1},
+        "proxy_0": {"reg_proxy": proxy, "reg_route": proxy, "reg_identity": identity,
+                    "reg_expires": 3600, "reg_sendregister": 1,
+                    # the app's voicemail button dials this; Asterisk sends the light unasked, so
+                    # no MWI subscription (mwi_server_uri)
+                    **({"voicemail_uri": f"sip:{voicemail}@{host}"} if voicemail else {})},
         "auth_info_0": {"username": ext, "userid": ext, "passwd": password, "domain": host},
         "misc": {"transient_provisioning": 1},  # apply once, then forget the address
     }
@@ -154,7 +160,8 @@ def main(argv=None):
     base = f"https://{c['name']}:{c['port']}"
     print(f"\nOpen on the phone:  {base}/{token}\n"
           f"or in Linphone:     linphone-config:{base}/{token}/linphone.xml\n", flush=True)
-    if serve(ext, linphone_xml(ext, password, c), token, base, c["listen"], c["port"], context,
+    voicemail = c.get("voicemail") or config.section("bridge").get("voicemail_extension", "")
+    if serve(ext, linphone_xml(ext, password, c, voicemail), token, base, c["listen"], c["port"], context,
              c["wait_minutes"] * 60):
         log.info("done: the phone has its settings")
     else:

@@ -57,8 +57,9 @@ In a session:
 - Once you're in a session you stay there; hang up and call again for the operator.
 
 Sessions ring you with `token-ring call "message"` and leave voicemail with `token-ring voicemail
-"message"`. With `[notify]`, a new voicemail also sends a text message to your phone
-(or an ntfy notification), with a reminder every hour while it's unheard. Text 200 from the phone's
+"message"`. With `[notify]`, a new voicemail lights the phone's voicemail indicator (MWI) until
+you've listened, and/or sends a text message to your phone (or an ntfy notification) with a
+reminder every hour while it's unheard. Text 200 from the phone's
 chat and the operator answers by text: ask it to have a session ring you back. When you answer, you hear the message and you're talking to the session that rang.
 `docs/agents.md` is what to tell your agents about it.
 
@@ -71,7 +72,7 @@ over your LAN or a VPN such as WireGuard rather than exposing SIP to the interne
 git clone https://github.com/abagonhishead/token-ring && cd token-ring
 cp config.example.toml config.toml        # then edit it: [user], [stt], [voices], [backends]
 mkdir -p secrets && openssl rand -hex 32 > secrets/token
-printf '[token-ring]\nsecret = %s\nread = user\nwrite = message,command\n' "$(openssl rand -hex 24)" > secrets/manager_auth.conf
+printf '[token-ring]\nsecret = %s\nread = user\nwrite = message,command,call\n' "$(openssl rand -hex 24)" > secrets/manager_auth.conf
 cat > secrets/pjsip_auth.conf <<'END'
 [100](auth-template)
 username = 100
@@ -87,6 +88,11 @@ docker compose --profile stt up -d        # Asterisk, the bridge, Piper and spea
 The first build compiles Asterisk, which takes a while (about 20 minutes on a Raspberry Pi 5).
 Register your phone as extension 100 at the machine's address on port 5060, and dial 601 to
 check speech both ways.
+
+With a certificate for the PBX's name (see Security), Linphone can be set up in one go:
+`docker compose run --rm provision 100` gives 100 a new password and prints a one-time link.
+Open it on the phone and Linphone gets the account (TLS, SRTP, display name, the voicemail button
+on 201). `[provision]` in the config has the settings.
 
 Then run the gateway where your AI runs. On the same machine it can be a container (`docker
 compose --profile gateway up -d`), but for Claude Code it's simplest on the host, beside your

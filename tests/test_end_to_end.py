@@ -223,13 +223,14 @@ def test_voicemail_and_outbound(system):
 
 class FakeAMI:
     """Enough of Asterisk's manager interface for texts: logins, "pjsip show contacts",
-    MessageSend, and UserEvents for texts from the phone."""
+    MessageSend, MWIUpdate, and UserEvents for texts from the phone."""
 
     def __init__(self):
         self.reachable = False
         self.sent = []
         self.froms = []
         self.listeners = []
+        self.mwi = []
 
     async def handle(self, reader, writer):
         writer.write(b"Asterisk Call Manager/9.0.0\r\n")
@@ -250,6 +251,9 @@ class FakeAMI:
                     self.sent.append(base64.b64decode(msg["Base64Body"]).decode())
                     self.froms.append(msg.get("From"))
                     writer.write(b"Response: Success\r\nMessage: Message successfully sent\r\n\r\n")
+                elif action == "MWIUpdate":
+                    self.mwi.append((msg["Mailbox"], int(msg["NewMessages"]), int(msg["OldMessages"])))
+                    writer.write(b"Response: Success\r\nMessage: Mailbox updated\r\n\r\n")
                 elif action == "Logoff":
                     writer.close()
                     return
@@ -310,4 +314,34 @@ def test_voicemail_texts(system, monkeypatch):
         follower.close()
         for t in tasks:
             t.cancel()
+    asyncio.run(main())
+
+
+def test_voicemail_light(system, conf, tmp_path, monkeypatch):
+    ports, said, tmp = system
+    monkeypatch.setattr(gateway, "NOTIFY_RETRY_S", 0.2)
+    text = (tmp_path / "config.toml").read_text().replace('via = ["phone"]', 'via = ["mwi"]')
+    conf(text)
+    ami = FakeAMI()
+
+    async def main():
+        await asyncio.start_server(ami.handle, "127.0.0.1", ports["ami"])
+        task = asyncio.create_task(bridge.outbound_loop())
+        threading.Thread(target=gateway.G.notify_loop, daemon=True).start()
+        await until(lambda: gateway.G.outbound, timeout=5)
+
+        await until(lambda: ami.mwi)  # the current state, once
+        assert ami.mwi == [("100@token-ring", 0, 0)]
+        gw(ports, "POST", "/voicemail", {"key": "beta", "message": "The build passed."})
+        await until(lambda: ami.mwi[-1] == ("100@token-ring", 1, 0))
+        msg_id = gw(ports, "GET", "/voicemail")["messages"][0]["id"]
+        gw(ports, "POST", f"/voicemail/{msg_id}/heard")
+        await until(lambda: ami.mwi[-1] == ("100@token-ring", 0, 1))
+        gw(ports, "POST", f"/voicemail/{msg_id}/delete")
+        await until(lambda: ami.mwi[-1] == ("100@token-ring", 0, 0))
+        n = len(ami.mwi)
+        await asyncio.sleep(1)
+        assert len(ami.mwi) == n  # only on changes
+        assert ami.sent == []
+        task.cancel()
     asyncio.run(main())

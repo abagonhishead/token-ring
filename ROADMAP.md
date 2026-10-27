@@ -27,4 +27,3 @@ Ideas and known gaps, roughly in order of how much they'd help. Nothing here is 
 - **More AI backends:** other agent CLIs (Codex CLI, Gemini CLI, aider, ...) and plain chat APIs,
   through the backend interface (`src/token_ring/backends/`).
 - **Published images** for amd64 and arm64.
-- **Message waiting indicator** on desk phones for unheard voicemail.

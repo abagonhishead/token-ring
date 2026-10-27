@@ -29,6 +29,8 @@ gateway_ca_file = ""           # CA bundle, for an https gateway_url with a priv
 ami_user = "token-ring"         # Asterisk's manager interface, for text messages ([notify])
 ami_secret_file = "/run/secrets/manager_auth.conf"   # the manager.conf section with its secret
 text_from = "201"              # who texts appear to come from
+mailbox = ""                   # the phone's mailbox for the voicemail light ("": 100@token-ring
+                               # for phone = "PJSIP/100", as in pjsip.conf)
 answer_wait_seconds = 4.0      # calls from sessions: wait this long for a "hello"
 pip_every_seconds = 3.0        # soft pip while a session works in silence
 
@@ -122,7 +124,8 @@ interrupt = ["cancel that"]    # stop speaking and interrupt the current turn
 # delivered (for "phone": the phone is registered and reachable), so one waits rather than
 # several piling up; reminders stop once they've listened, or replied to the text.
 [notify]
-via = []                       # "phone" (a text message, through Asterisk), "ntfy"
+via = []                       # "phone" (a text message, through Asterisk), "ntfy", "mwi" (the
+                               # phone's voicemail light: needs mailboxes = on its endpoint)
 remind_every_minutes = 60      # 0: no reminders
 preview = true                 # include the start of the message
 [notify.ntfy]
@@ -142,6 +145,9 @@ cert_file = "/tls/fullchain.pem"           # a certificate for name, and its key
 key_file = "/tls/privkey.pem"
 auth_file = "/secrets/pjsip_auth.conf"     # the extensions' passwords (written to)
 wait_minutes = 10
+voicemail = ""                 # what the app's voicemail button dials ("": voicemail_extension)
+[provision.names]              # display names for the accounts
+# 100 = "Phone"
 
 # Respellings for words the TTS gets wrong: whole words, case-insensitive.
 [pronunciations]
