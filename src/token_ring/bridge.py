@@ -236,14 +236,14 @@ async def send_text(text_id, text, sender=None):
 
 def mailbox():
     """The phone's mailbox for MWI: [bridge] mailbox, else <its endpoint>@token-ring (pjsip.conf's
-    mailboxes = on the endpoint)."""
+    mailboxes = on its AOR)."""
     c = bridge_conf()
     return c.get("mailbox") or c["phone"].partition("/")[2] + "@token-ring"
 
 
 async def update_mwi(req_id, new, old):
     """Set the voicemail light (res_mwi_external): Asterisk keeps the counts and tells the phone,
-    now and whenever it registers."""
+    while its subscription lasts (the phone renews it)."""
     status = "failed"
     try:
         resp = await ami_action({"Action": "MWIUpdate", "Mailbox": mailbox(),

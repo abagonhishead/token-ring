@@ -125,7 +125,8 @@ interrupt = ["cancel that"]    # stop speaking and interrupt the current turn
 # several piling up; reminders stop once they've listened, or replied to the text.
 [notify]
 via = []                       # "phone" (a text message, through Asterisk), "ntfy", "mwi" (the
-                               # phone's voicemail light: needs mailboxes = on its endpoint)
+                               # phone's voicemail light: needs mailboxes = on its AOR, and the
+                               # phone subscribing to it, as provisioning sets up)
 remind_every_minutes = 60      # 0: no reminders
 preview = true                 # include the start of the message
 [notify.ntfy]

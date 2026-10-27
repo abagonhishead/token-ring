@@ -29,6 +29,14 @@ def test_set_password_changes_only_that_extension(tmp_path):
     assert "password = keep-me" in text
 
 
+def test_get_password(tmp_path):
+    f = tmp_path / "pjsip_auth.conf"
+    f.write_text(AUTH)
+    assert provision.get_password(f, "101") == "keep-me"
+    with pytest.raises(SystemExit):
+        provision.get_password(f, "102")
+
+
 def test_set_password_unknown_extension(tmp_path):
     f = tmp_path / "pjsip_auth.conf"
     f.write_text(AUTH)
@@ -83,3 +91,4 @@ def test_linphone_xml_name_and_voicemail():
     e = entries(provision.linphone_xml("100", "pw", {**CONF, "names": {"100": 'My "PBX"'}}, "201"))
     assert e["proxy_0", "reg_identity"] == '"My PBX" <sip:100@pbx.example.net>'
     assert e["proxy_0", "voicemail_uri"] == "sip:201@pbx.example.net"
+    assert e["proxy_0", "mwi_server_uri"] == "sip:100@pbx.example.net"

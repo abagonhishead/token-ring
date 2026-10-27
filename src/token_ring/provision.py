@@ -2,6 +2,8 @@
 
   token-ring-provision 100    give extension 100 a new password, then serve its settings once
                               over HTTPS at a random address, and print the link
+  token-ring-provision --keep-password 100
+                              the same with its current password (setting the phone up again)
 
 Opening the link on the phone shows a button that hands the settings to Linphone, which applies
 them and forgets the address (or paste the address into Linphone's remote provisioning setting).
@@ -45,6 +47,21 @@ def provision_conf():
     return config.section("provision")
 
 
+def get_password(path, ext):
+    """The password in [ext] of an Asterisk auth include."""
+    section = None
+    with open(path) as f:
+        for line in f:
+            m = re.match(r"\s*\[([^\]]+)\]", line)
+            if m:
+                section = m.group(1).strip()
+            elif section == ext:
+                m = re.match(r"\s*password\s*=\s*(\S+)", line)
+                if m:
+                    return m.group(1)
+    raise SystemExit(f"{path}: no password for [{ext}]")
+
+
 def set_password(path, ext, password):
     """Replace the password in [ext] of an Asterisk auth include, in place (it's often a bind
     mount, which can't be replaced by renaming)."""
@@ -80,8 +97,9 @@ def linphone_xml(ext, password, c, voicemail=""):
     sections = {
         "proxy_0": {"reg_proxy": proxy, "reg_route": proxy, "reg_identity": identity,
                     "reg_expires": 3600, "reg_sendregister": 1,
-                    # the app's voicemail button dials this; Asterisk sends the light unasked, so
-                    # no MWI subscription (mwi_server_uri)
+                    # the voicemail light: subscribe to this extension's mailbox (pjsip.conf)
+                    "mwi_server_uri": f"sip:{ext}@{host}",
+                    # and the app's voicemail button dials this
                     **({"voicemail_uri": f"sip:{voicemail}@{host}"} if voicemail else {})},
         "auth_info_0": {"username": ext, "userid": ext, "passwd": password, "domain": host},
         "misc": {"transient_provisioning": 1},  # apply once, then forget the address
@@ -140,6 +158,8 @@ def serve(ext, xml, token, base, host, port, context=None, wait_s=600):
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
+    keep = "--keep-password" in args
+    args = [a for a in args if a != "--keep-password"]
     if len(args) != 1 or args[0] in ("-h", "--help", "help"):
         print(__doc__)
         sys.exit(0 if args else 2)
@@ -150,11 +170,14 @@ def main(argv=None):
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     context.load_cert_chain(config.expand(c["cert_file"]), config.expand(c["key_file"]))
 
-    password = secrets.token_urlsafe(24)
-    set_password(config.expand(c["auth_file"]), ext, password)
-    if not asyncio.run(reload_and_check(ext, password)):
-        sys.exit("Asterisk didn't pick up the new password (module reload res_pjsip.so); nothing served")
-    log.info("extension %s has a new password", ext)
+    if keep:
+        password = get_password(config.expand(c["auth_file"]), ext)
+    else:
+        password = secrets.token_urlsafe(24)
+        set_password(config.expand(c["auth_file"]), ext, password)
+        if not asyncio.run(reload_and_check(ext, password)):
+            sys.exit("Asterisk didn't pick up the new password (module reload res_pjsip.so); nothing served")
+        log.info("extension %s has a new password", ext)
 
     token = secrets.token_urlsafe(18)
     base = f"https://{c['name']}:{c['port']}"

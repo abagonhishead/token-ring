@@ -91,8 +91,9 @@ check speech both ways.
 
 With a certificate for the PBX's name (see Security), Linphone can be set up in one go:
 `docker compose run --rm provision 100` gives 100 a new password and prints a one-time link.
-Open it on the phone and Linphone gets the account (TLS, SRTP, display name, the voicemail button
-on 201). `[provision]` in the config has the settings.
+Open it on the phone and Linphone gets the account (TLS, SRTP, display name, the voicemail light,
+and its voicemail button on 201). `[provision]` in the config has the settings. If Linphone
+already has the account, delete it first: it can hold on to the old password.
 
 Then run the gateway where your AI runs. On the same machine it can be a container (`docker
 compose --profile gateway up -d`), but for Claude Code it's simplest on the host, beside your
