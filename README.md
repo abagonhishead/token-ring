@@ -207,6 +207,12 @@ class = "my_alarm:AlarmCall"     # importable in the bridge (add it to your brid
 - Phone conversations run with `[backends.claude-code] permission_mode` (`default` unless you
   choose otherwise). Permission prompts are never answered by phone.
 - Use TLS for the gateway (`tls_cert`, `tls_key`) when the bridge is on another machine.
+- Calls and texts are plain SIP and RTP unless you switch on encryption. That's fine inside a VPN;
+  on a shared network, turn on the TLS transport and SRTP in `asterisk/pjsip.conf` and mount a
+  certificate (see the comments there and in `compose.yaml`). The phone registers with
+  `;transport=tls` on port 5061 and uses SRTP (SDES) for media. ZRTP isn't supported by Asterisk.
+  The certificate needs a name the phone trusts: a Let's Encrypt certificate issued with a DNS
+  challenge works even when the name only points at a private address.
 
 ## Layout
 

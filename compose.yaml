@@ -28,6 +28,7 @@ services:
     volumes:
       - spool:/var/spool/asterisk
       - astdb:/var/lib/asterisk/db
+      # - ./tls:/etc/asterisk/tls:ro           # TLS: fullchain.pem and privkey.pem (asterisk/pjsip.conf)
     secrets:
       - pjsip_auth.conf
       - manager_auth.conf
