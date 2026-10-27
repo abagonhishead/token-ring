@@ -59,6 +59,8 @@ def test_linphone_xml():
     assert e["auth_info_0", "passwd"] == "p&ss<word>"
     assert e["sip", "media_encryption"] == "srtp" and e["sip", "media_encryption_mandatory"] == "1"
     assert e["misc", "transient_provisioning"] == "1"
+    assert e["proxy_0", "push_notification_allowed"] == "0"
+    assert e["app", "keep_service_alive"] == "1"
 
 
 def test_linphone_xml_leaves_encryption_alone():

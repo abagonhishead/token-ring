@@ -65,6 +65,8 @@ through Asterisk; the outbound feed carries {"text", "id"}) and/or an ntfy notif
 Voicemail (text: read out in the sender's voice). Messages for the user are in
 <data_dir>/voicemail/inbox, theirs for sessions in outbox until delivered:
 
+  GET  /logs?lines=N&follow=1     the gateway's recent log lines, {"line"} per line (the web page),
+                                 then new ones as they're logged while the connection lasts
   GET  /voicemail                {"messages": [{"id", "from", "label", "text", "at", "heard"}],
                                  "new": n}, oldest first
   POST /voicemail                {"key", "message"}, local only (`token-ring voicemail`)
@@ -77,6 +79,7 @@ Only addresses in [gateway] allowed may connect; every request needs "Authorizat
 <token>" if a token is set. With tls_cert and tls_key it serves HTTPS, reloading the certificate
 when it changes.
 """
+import collections
 import glob
 import hmac
 import ipaddress
@@ -582,6 +585,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, G.sessions())
         if self.path == "/outbound":
             return self.outbound()
+        url = urllib.parse.urlsplit(self.path)
+        if url.path == "/logs":
+            q = urllib.parse.parse_qs(url.query)
+            return self.logs(int(q.get("lines", ["500"])[0]), q.get("follow", ["0"])[0] == "1")
         if self.path == "/voicemail":
             messages = G.vm_list("inbox")
             return self.reply(200, {"messages": messages, "new": sum(not m["heard"] for m in messages)})
@@ -762,6 +769,25 @@ class Handler(BaseHTTPRequestHandler):
         G.notify_now.set()
         return self.reply(200, {"ok": True})
 
+    def logs(self, lines, follow):
+        emit = self.stream()
+        with LOGS.changed:
+            count = max(0, LOGS.count - max(0, min(lines, LOGS.lines.maxlen)))
+        try:
+            while True:
+                new, count = LOGS.since(count)
+                for line in new:
+                    emit({"line": line})
+                if not follow:
+                    return
+                with LOGS.changed:
+                    if LOGS.count == count:
+                        LOGS.changed.wait(PING_EVERY_S)
+                if LOGS.count == count:
+                    emit({"ping": 1})
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+            pass
+
     def outbound(self):
         """Feed calls to place to the bridge for as long as it stays connected."""
         q = queue.Queue()
@@ -897,9 +923,40 @@ class Server(ThreadingHTTPServer):
         super().finish_request(request, client_address)
 
 
+class LogBuffer(logging.Handler):
+    """The last few thousand log lines, for GET /logs."""
+
+    def __init__(self, size=5000):
+        super().__init__()
+        self.lines = collections.deque(maxlen=size)
+        self.count = 0
+        self.changed = threading.Condition()
+        self.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+        except Exception:
+            return
+        with self.changed:
+            self.lines.append(line)
+            self.count += 1
+            self.changed.notify_all()
+
+    def since(self, count):
+        """Lines logged after the first count, and the new count."""
+        with self.changed:
+            new = min(self.count - count, len(self.lines))
+            return list(self.lines)[len(self.lines) - new:] if new > 0 else [], self.count
+
+
+LOGS = LogBuffer()
+
+
 def run():
     global G
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger().addHandler(LOGS)
     c = gateway_conf()
     G = Gateway()
     log.info("backend %s; %d session(s)", c["backend"], len(G.sessions()))

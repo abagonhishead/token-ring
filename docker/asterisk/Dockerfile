@@ -1,6 +1,6 @@
 # Asterisk LTS built from source (there's no official image), with the token-ring config.
 # Build from the repository root:  docker build -f docker/asterisk/Dockerfile -t token-ring-asterisk .
-# Your own image: FROM this, COPY your asterisk configs over /etc/asterisk.
+# Your own image: FROM this, COPY your asterisk configs over /usr/share/asterisk-etc.
 ARG DEBIAN=trixie
 
 FROM debian:${DEBIAN}-slim AS build
@@ -38,16 +38,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --system --gid ${UID} asterisk \
     && useradd --system --uid ${UID} --gid ${UID} --home-dir /var/lib/asterisk asterisk
 COPY --from=build /out/ /
-COPY asterisk/ /etc/asterisk/
+# The configuration is in /usr/share/asterisk-etc: seed-config brings it into /etc/asterisk (a
+# volume the web page can edit) at each start, keeping edits made there. Your own image: COPY your
+# files to /usr/share/asterisk-etc.
+RUN mv /etc/asterisk /usr/share/asterisk-etc && mkdir /etc/asterisk
+COPY asterisk/ /usr/share/asterisk-etc/
+COPY docker/asterisk/seed-config /usr/local/bin/seed-config
 # Empty stubs for modules that otherwise log about missing configs.
 # Already running as asterisk: no need to switch user
-RUN sed -i '/^run\(user\|group\)/d' /etc/asterisk/asterisk.conf \
+RUN sed -i '/^run\(user\|group\)/d' /usr/share/asterisk-etc/asterisk.conf \
     && for f in acl aeap ari ccss cdr cel chan_websocket cli_aliases features musiconhold pjproject pjsip_notify pjsip_wizard \
         res_http_media_cache res_stun_monitor stasis udptl voicemail websocket_client; do \
-        test -e /etc/asterisk/$f.conf || : > /etc/asterisk/$f.conf; done \
+        test -e /usr/share/asterisk-etc/$f.conf || : > /usr/share/asterisk-etc/$f.conf; done \
     && mkdir -p /var/spool/asterisk/outgoing /var/spool/asterisk/token-ring /var/lib/asterisk/db /run/asterisk /var/log/asterisk \
     && chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/spool/asterisk /run/asterisk /var/log/asterisk
 USER asterisk
 # Keep /var/lib/asterisk/db (registrations) on a volume, or phones are forgotten on restart until
 # they register again. SIP (5060 UDP/TCP) and RTP (10000-10999 UDP, rtp.conf): host networking
-CMD ["asterisk", "-f", "-vvv"]
+CMD ["sh", "-c", "seed-config && exec asterisk -f -vvv"]

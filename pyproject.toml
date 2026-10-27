@@ -23,9 +23,13 @@ token-ring = "token_ring.cli:main"
 token-ring-bridge = "token_ring.bridge:run"
 token-ring-gateway = "token_ring.gateway:run"
 token-ring-provision = "token_ring.provision:main"
+token-ring-web = "token_ring.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+token_ring = ["web.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

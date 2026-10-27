@@ -28,6 +28,8 @@ services:
     volumes:
       - spool:/var/spool/asterisk
       - astdb:/var/lib/asterisk/db
+      - asterisk-etc:/etc/asterisk              # seeded from the image; the web page edits it
+      - logs:/var/log/asterisk
       # - ./tls:/etc/asterisk/tls:ro           # TLS: fullchain.pem and privkey.pem (asterisk/pjsip.conf)
     secrets:
       - pjsip_auth.conf
@@ -41,6 +43,23 @@ services:
     volumes:
       - spool:/var/spool/asterisk
       - ./config.toml:/etc/token-ring/config.toml:ro
+      - tr-logs:/var/log/token-ring             # [bridge] log_file, for the web page
+    secrets:
+      - token
+      - manager_auth.conf
+
+  # The web page: https://<this machine>:8443 (no login yet: keep it to your LAN or VPN)
+  web:
+    image: token-ring-bridge
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["token-ring-web"]
+    volumes:
+      - ./config.toml:/etc/token-ring/config.toml  # writable: the page edits it
+      - asterisk-etc:/etc/asterisk
+      - logs:/var/log/asterisk
+      - tr-logs:/var/log/token-ring:ro
+      - ./tls:/tls:ro
     secrets:
       - token
       - manager_auth.conf
@@ -118,6 +137,9 @@ services:
 volumes:
   spool:
   astdb:
+  asterisk-etc:
+  logs:
+  tr-logs:
   hf-cache:
 
 secrets:

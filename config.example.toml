@@ -33,6 +33,7 @@ mailbox = ""                   # the phone's mailbox for the voicemail light (""
                                # for phone = "PJSIP/100", as in pjsip.conf)
 answer_wait_seconds = 4.0      # calls from sessions: wait this long for a "hello"
 pip_every_seconds = 3.0        # soft pip while a session works in silence
+log_file = "/var/log/token-ring/bridge.log"   # also log here, for the web page ("" not to)
 
 [gateway]
 host = "127.0.0.1"             # 0.0.0.0 if the bridge is on another machine
@@ -132,6 +133,19 @@ preview = true                 # include the start of the message
 [notify.ntfy]
 # url = "https://ntfy.sh/your-secret-topic"   # or your own ntfy server
 # token_env = "NTFY_TOKEN"
+
+# The web page (token-ring-web; the web service in compose.yaml). No login yet: LAN or VPN only.
+[web]
+port = 8443
+cert_file = "/tls/fullchain.pem"           # HTTPS when both exist
+key_file = "/tls/privkey.pem"
+ami_user = "token-ring-web"                # its manager login, a section in ami_secret_file
+
+# Speech detection: which of the caller's sound is speech (see src/token_ring/vad.py)
+[vad]
+engine = "energy"              # "silero" (in the bridge image) ignores noise that isn't speech
+near_db = 12                   # ignore voices this much quieter than the caller's (a TV); 0: off
+min_level_db = -100            # and anything quieter than this; the bridge logs each utterance's level
 
 # Setting up a phone by remote provisioning (Linphone): `token-ring-provision 100` gives 100 a new
 # password and serves its settings once over HTTPS (docker compose run --rm provision 100).

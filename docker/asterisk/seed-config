@@ -1,0 +1,26 @@
+#!/bin/sh
+# /etc/asterisk is a volume (the web page edits it); the image's configuration is in
+# /usr/share/asterisk-etc. Bring the image's files in: a missing file, or one still as an earlier
+# image had it (not edited since), takes the image's; one edited here is kept, with the image's
+# new version beside it as <name>.image-new. /etc/asterisk/.image records what the image had.
+set -eu
+src=/usr/share/asterisk-etc
+dst=/etc/asterisk
+rec=$dst/.image
+[ -d "$src" ] || exit 0
+mkdir -p "$rec"
+for f in "$src"/*; do
+    [ -f "$f" ] || continue
+    n=${f##*/}
+    if [ ! -e "$dst/$n" ] || { [ -e "$rec/$n" ] && cmp -s "$dst/$n" "$rec/$n"; }; then
+        cmp -s "$f" "$dst/$n" 2>/dev/null || cp "$f" "$dst/$n"
+    elif cmp -s "$f" "$dst/$n"; then
+        :  # edited here to just what the image now has: in step again
+    elif [ ! -e "$rec/$n" ]; then
+        :  # there before records were kept: leave it alone
+    elif ! cmp -s "$f" "$rec/$n"; then
+        cp "$f" "$dst/$n.image-new"
+        echo "seed-config: $n was edited here and the image has a new version: $n.image-new" >&2
+    fi
+    cp "$f" "$rec/$n"
+done

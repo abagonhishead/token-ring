@@ -160,9 +160,18 @@ def on_outbound(ev, done):
 # whether a phone took one. The user's texts back come in as UserEvents from the
 # [token-ring-messages] dialplan context.
 
-def ami_secret():
+def ami_secret(user=None, secret="", secret_file=None):
+    """The AMI password: [bridge] ami_secret, else the secret = in the manager.conf section for the
+    user in [bridge] ami_secret_file (the first one if there's no such section)."""
     c = bridge_conf()
-    raw = config.secret({"secret": c.get("ami_secret"), "secret_file": c.get("ami_secret_file")}, "secret")
+    user = user or c["ami_user"]
+    raw = config.secret({"secret": secret if secret_file is not None else c.get("ami_secret"),
+                         "secret_file": secret_file if secret_file is not None else c.get("ami_secret_file")}, "secret")
+    sections = re.split(r"^\s*\[([^\]]+)\]\s*$", raw, flags=re.M)
+    for name, body in zip(sections[1::2], sections[2::2]):
+        if name.strip() == user:
+            raw = body
+            break
     m = re.search(r"^\s*secret\s*=\s*(\S+)", raw, re.M)
     return m.group(1) if m else raw.strip()
 
@@ -186,11 +195,13 @@ async def ami_read(reader):
             msg[key] = value
 
 
-async def ami_connect(events="off"):
+async def ami_connect(events="off", login=None):
+    """A logged-in AMI connection: the bridge's ([bridge] ami_user), or login = (user, secret)."""
     c = bridge_conf()
+    user, secret = login or (c["ami_user"], ami_secret())
     reader, writer = await asyncio.wait_for(asyncio.open_connection(c["ami_host"], c["ami_port"]), 5)
     await reader.readline()  # "Asterisk Call Manager/..."
-    ami_send(writer, {"Action": "Login", "Username": c["ami_user"], "Secret": ami_secret(), "Events": events})
+    ami_send(writer, {"Action": "Login", "Username": user, "Secret": secret, "Events": events})
     resp = await asyncio.wait_for(ami_read(reader), 5)
     if resp.get("Response") != "Success":
         writer.close()
@@ -202,11 +213,34 @@ def ami_send(writer, fields):
     writer.write("".join(f"{k}: {v}\r\n" for k, v in fields.items()).encode() + b"\r\n")
 
 
-async def ami_action(fields, timeout=10):
-    reader, writer = await ami_connect()
+async def ami_action(fields, timeout=10, login=None):
+    reader, writer = await ami_connect(login=login)
     try:
         ami_send(writer, fields)
         return await asyncio.wait_for(ami_read(reader), timeout)
+    finally:
+        ami_send(writer, {"Action": "Logoff"})
+        writer.close()
+
+
+async def ami_list(fields, timeout=10, login=None):
+    """An action that answers with a list of events (PJSIPShowContacts, ShowDialPlan, ...): the
+    events, without the response and the "...Complete" one."""
+    reader, writer = await ami_connect(login=login)
+    try:
+        ami_send(writer, fields)
+        first = await asyncio.wait_for(ami_read(reader), timeout)
+        if first.get("Response") != "Success":
+            msg = first.get("Message", "").lower()
+            if msg.startswith("no ") or "not found" in msg or "did not find" in msg:
+                return []  # an empty list
+            raise RuntimeError(f"{fields['Action']}: {first.get('Message', 'failed')}")
+        events = []
+        while True:
+            ev = await asyncio.wait_for(ami_read(reader), timeout)
+            if ev.get("EventList") == "Complete" or ev.get("Event", "").endswith("Complete"):
+                return events
+            events.append(ev)
     finally:
         ami_send(writer, {"Action": "Logoff"})
         writer.close()
@@ -1198,8 +1232,25 @@ async def main():
     await asyncio.gather(*(srv.serve_forever() for srv in servers), *tasks)
 
 
+def log_to_file(path, fmt):
+    """Also log to path (rotated at 5 MB, two old ones kept), for the web page."""
+    if not path:
+        return
+    import logging.handlers
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        h = logging.handlers.RotatingFileHandler(path, maxBytes=5_000_000, backupCount=2)
+    except OSError as e:
+        log.warning("can't log to %s: %s", path, e)
+        return
+    h.setFormatter(logging.Formatter(fmt, datefmt="%Y-%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(h)
+
+
 def run():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s.%(msecs)03d %(message)s", datefmt="%H:%M:%S")
+    config.seed()
+    log_to_file(config.expand(bridge_conf().get("log_file")), "%(asctime)s.%(msecs)03d %(message)s")
     asyncio.run(main())
 
 

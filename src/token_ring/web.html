@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>token-ring PBX</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #667085; --line: #e3e6eb;
+  --accent: #e8590c; --ok: #2f9e44; --warn: #e67700; --bad: #e03131; --idle: #adb5bd;
+  --code: #f1f3f5; --shadow: 0 1px 2px rgba(16,24,40,.06);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111418; --panel: #1a1f26; --ink: #e6e9ee; --muted: #8b95a5; --line: #2a313b;
+          --accent: #ff7a33; --ok: #51cf66; --warn: #ffa94d; --bad: #ff6b6b; --idle: #5c6670;
+          --code: #12161b; --shadow: none; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line);
+         display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 10px 20px; }
+header h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+header .sub { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; }
+nav button { border: 0; background: none; color: var(--muted); padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.on { background: var(--code); color: var(--ink); font-weight: 600; }
+.spacer { flex: 1; }
+.switch { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--muted); }
+.switch input { display: none; }
+.switch .track { width: 34px; height: 20px; border-radius: 10px; background: var(--idle); position: relative; transition: .15s; }
+.switch .track::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .15s; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::after { left: 16px; }
+.switch input:checked ~ span { color: var(--accent); font-weight: 600; }
+main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+section[hidden] { display: none; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); margin-bottom: 16px; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0;
+           padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.card .body { padding: 12px 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 16px; }
+.grid .body { overflow-x: auto; }
+.grid .card { margin: 0; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--idle); flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--code); color: var(--muted); margin-right: 4px; white-space: nowrap; }
+.tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.diagram-wrap { overflow-x: auto; }
+svg.diagram { width: 100%; min-width: 980px; height: auto; display: block; }
+svg.diagram text { fill: var(--ink); font: 12px system-ui, sans-serif; }
+svg.diagram .sub { fill: var(--muted); font-size: 11px; }
+svg.diagram .head { fill: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+svg.diagram rect.node { fill: var(--panel); stroke: var(--line); }
+svg.diagram rect.node.ok { stroke: var(--ok); } svg.diagram rect.node.bad { stroke: var(--bad); }
+svg.diagram rect.node.idle { stroke-dasharray: 4 3; }
+svg.diagram rect.node.core { fill: var(--code); }
+svg.diagram path { fill: none; stroke: var(--idle); stroke-width: 1.5; }
+svg.diagram path.ok { stroke: var(--ok); } svg.diagram path.bad { stroke: var(--bad); stroke-dasharray: 5 4; }
+svg.diagram path.idle { stroke-dasharray: 4 4; }
+/* Logs */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel); color: var(--muted); padding: 5px 12px; cursor: pointer; font: inherit; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--code); color: var(--ink); font-weight: 600; }
+input[type=search], select { font: inherit; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
+button.btn { font: inherit; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button.btn:hover { border-color: var(--muted); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.danger { color: var(--bad); }
+button.btn:disabled { opacity: .5; cursor: default; }
+#loglines { font-family: var(--mono); font-size: 12px; line-height: 1.5; height: calc(100vh - 230px); min-height: 300px;
+            overflow: auto; padding: 8px 16px; white-space: pre-wrap; word-break: break-word; background: var(--code); border-radius: 0 0 10px 10px; }
+#loglines .l-err { color: var(--bad); } #loglines .l-warn { color: var(--warn); } #loglines .l-dim { color: var(--muted); }
+#loglines mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; }
+/* Config */
+.cfg { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
+@media (max-width: 760px) { .cfg { grid-template-columns: 1fr; } }
+.files { list-style: none; margin: 0; padding: 6px; }
+.files li { padding: 6px 10px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
+.files li:hover { background: var(--code); }
+.files li.on { background: var(--code); font-weight: 600; }
+.files li .empty { color: var(--muted); }
+.editor { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; width: 100%; min-height: calc(100vh - 290px);
+          border: 0; padding: 12px 16px; background: var(--code); color: var(--ink); resize: vertical; tab-size: 4; border-radius: 0 0 10px 10px; }
+.editor:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.result { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 13px; }
+.result pre { margin: 6px 0 0; white-space: pre-wrap; }
+.note { padding: 10px 16px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); }
+.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="hdot"></span>token-ring PBX</h1>
+  <span class="sub" id="hsub">connecting…</span>
+  <nav>
+    <button data-tab="overview" class="on">Overview</button>
+    <button data-tab="logs">Logs</button>
+    <button data-tab="config">Configuration</button>
+  </nav>
+  <span class="spacer"></span>
+  <label class="switch" title="Editing configuration, reloads and restarts">
+    <input type="checkbox" id="advanced"><span class="track"></span><span>Advanced</span>
+  </label>
+</header>
+<main>
+  <section id="overview">
+    <div class="card"><h2>Connections</h2><div class="body diagram-wrap"><svg class="diagram" id="diagram"></svg></div></div>
+    <div class="grid">
+      <div class="card"><h2>Devices</h2><div class="body"><table id="devices"></table></div></div>
+      <div class="card"><h2>Services</h2><div class="body"><table id="services"></table></div></div>
+      <div class="card"><h2>Calls &amp; voicemail</h2><div class="body" id="calls"></div></div>
+      <div class="card"><h2>Dialplan</h2><div class="body"><table id="dialplan"></table></div></div>
+    </div>
+  </section>
+
+  <section id="logs" hidden>
+    <div class="card">
+      <div class="toolbar">
+        <div class="seg" id="logsrc">
+          <button data-src="asterisk" class="on">Asterisk</button><button data-src="bridge">Bridge</button><button data-src="gateway">Gateway</button>
+        </div>
+        <label class="switch"><input type="checkbox" id="live" checked><span class="track"></span><span>Live</span></label>
+        <input type="search" id="logfilter" placeholder="Filter" size="24">
+        <label class="muted"><input type="checkbox" id="problems"> warnings &amp; errors only</label>
+        <span class="spacer"></span>
+        <span class="muted" id="logcount"></span>
+        <button class="btn" id="logclear">Clear</button>
+      </div>
+      <div id="loglines"></div>
+    </div>
+  </section>
+
+  <section id="config" hidden>
+    <div class="cfg">
+      <div class="card" style="margin:0">
+        <h2>Files</h2>
+        <ul class="files" id="files"></ul>
+        <div class="body"><label class="muted"><input type="checkbox" id="showempty"> show empty stubs</label></div>
+      </div>
+      <div class="card" style="margin:0">
+        <div class="toolbar">
+          <strong id="cfgname">—</strong>
+          <span id="cfgtags"></span>
+          <span class="spacer"></span>
+          <select id="backups" hidden><option value="">Backups…</option></select>
+          <button class="btn" id="imagever" hidden>Image version</button>
+          <button class="btn" id="revert" hidden>Discard changes</button>
+          <button class="btn primary" id="save" hidden>Save &amp; reload</button>
+          <button class="btn danger" id="restart" hidden>Restart Asterisk</button>
+        </div>
+        <div class="note" id="cfgnote"></div>
+        <textarea class="editor" id="editor" spellcheck="false" readonly></textarea>
+        <div class="result" id="result" hidden></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("tr." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("tr." + k, JSON.stringify(v)); } catch {} },
+};
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: {"Content-Type": "application/json"}, ...opts});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+// Tabs and the Advanced switch
+const TABS = ["overview", "logs", "config"];
+let tab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : store.get("tab", "overview");
+function showTab(t) {
+  tab = t; store.set("tab", t);
+  if (location.hash.slice(1) !== t) history.replaceState(null, "", "#" + t);
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== t);
+  if (t === "logs") startLogs(); else stopLogs();
+  if (t === "config") loadFiles();
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if (TABS.includes(t) && t !== tab) showTab(t); });
+const adv = $("#advanced");
+adv.checked = store.get("advanced", false);
+adv.onchange = () => { store.set("advanced", adv.checked); if (current) openFile(current.kind, current.name, true); };
+
+// Overview
+let status = null;
+function uaShort(ua) {
+  const m = ua.match(/^(\w+?)(?:Android|IOS|Desktop)?\/([\d.]+)\s*\(([^)]*)\)/i);
+  return m ? `${m[1]} ${m[2]} · ${m[3]}` : ua.split(" ")[0] || "";
+}
+function extInfo(e, ports) {
+  const apps = e.steps.map(s => `${s.app}(${s.data})`).join(" ");
+  const restricted = /CHANNEL\(endpoint\)\}?"? != "(\d+)"/.exec(apps);
+  let label = e.steps.find(s => !/^(Answer|Progress|Playtones|Wait|StopPlaytones|GotoIf|NoOp|Set|Hangup)$/.test(s.app))?.app || "";
+  let port = null;
+  const a = /AudioSocket\/[\d.]+:(\d+)/.exec(apps);
+  if (a) { port = +a[1]; const p = ports.find(p => p.port === port); label = p ? p.name.replace(/\s*\(.*\)/, "") : `bridge ${port}`; }
+  else if (/Echo\(/.test(apps)) label = "audio echo";
+  else if (/outgoing/.test(apps)) label = "ring-back test";
+  else if (/Dial\(PJSIP\/\$\{EXTEN\}/.test(apps)) label = "dial a phone";
+  return {label, port, only: restricted ? restricted[1] : null};
+}
+function renderDiagram(st) {
+  const svg = $("#diagram");
+  const ports = st.services.bridge;
+  const devs = st.endpoints.map(ep => ({ep, c: st.contacts.find(c => c.endpoint === ep.name)}));
+  const internal = (st.dialplan.find(d => d.context === "internal") || {extensions: []}).extensions
+    .map(e => ({...e, ...extInfo(e, ports)}));
+  const bridgeUp = ports.every(p => p.up);
+  const svc = [
+    {t: "Gateway", s: st.services.gateway.detail.replace(/assistant: |host: /g, "") || st.services.gateway.url, up: st.services.gateway.up},
+    {t: "Speech-to-text", s: `${st.services.stt.engine} · ${(st.services.stt.url || "").replace(/^https?:\/\//, "").split("/")[0]}`, up: st.services.stt.up},
+    ...st.services.tts.map(t => ({t: "Text-to-speech", s: `${t.name} · ${(t.url || "").replace(/^https?:\/\//, "")}`, up: t.up})),
+  ];
+  // columns: devices, Asterisk, extensions, bridge, services
+  const X = [10, 285, 505, 745, 935], Wd = [225, 175, 190, 145, 200];
+  const rowH = 70, nodeH = 58, top = 34;
+  const rows = Math.max(devs.length, internal.length, svc.length, 3);
+  const H = top + rows * rowH + 6;
+  const y = (i, n) => top + i * rowH + (rows - n) * rowH / 2;
+  const clip = (t, n) => t.length > n ? t.slice(0, n - 1) + "…" : t;
+  const node = (x, yy, w, h, title, subs, cls = "") =>
+    `<rect class="node ${cls}" x="${x}" y="${yy}" width="${w}" height="${h}" rx="8"/>` +
+    `<text x="${x + 12}" y="${yy + 19}" font-weight="600">${esc(title)}</text>` +
+    subs.filter(Boolean).map((t, i) => `<text class="sub" x="${x + 12}" y="${yy + 35 + i * 15}">${esc(t)}</text>`).join("");
+  const curve = (x1, y1, x2, y2, cls) => { const mx = (x1 + x2) / 2;
+    return `<path class="${cls}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`; };
+  let out = ["Devices", "Asterisk", "Extensions", "Bridge", "Services"].map((h, i) => `<text class="head" x="${X[i]}" y="16">${h}</text>`).join("");
+  let edges = "", nodes = "";
+  // Asterisk: one tall box
+  const ay = top, ah = rows * rowH - (rowH - nodeH);
+  const amid = v => Math.min(Math.max(v, ay + 16), ay + ah - 16);
+  nodes += node(X[1], ay, Wd[1], ah, `Asterisk ${st.asterisk.version || ""}`, [
+    ...st.transports.map(t => `${t.protocol.toUpperCase()} on ${t.bind.split(":").pop()}`), "",
+    `${st.asterisk.calls ?? 0} call(s) now`, `up since ${(st.asterisk.started || "").slice(5, 16)}`], "core ok");
+  devs.forEach(({ep, c}, i) => {
+    const yy = y(i, devs.length), up = c && c.status === "Reachable";
+    const name = (ep.callerid.match(/"([^"]*)"/) || [])[1] || ep.callerid;
+    nodes += node(X[0], yy, Wd[0], nodeH, `${ep.name} · ${name}`, c
+      ? [clip(uaShort(c.user_agent), 34), `${c.ip} · ${c.transport}${ep.encryption !== "no" ? " · SRTP" : ""} · ${c.rtt_ms} ms`]
+      : ["not registered"], c ? (up ? "ok" : "bad") : "idle");
+    edges += curve(X[0] + Wd[0], yy + nodeH / 2, X[1], amid(yy + nodeH / 2), c ? (up ? "ok" : "bad") : "idle");
+  });
+  const bridgeY = top + (rows * rowH - (rowH - nodeH)) / 2 - nodeH / 2;
+  internal.forEach((e, i) => {
+    const yy = y(i, internal.length);
+    nodes += node(X[2], yy, Wd[2], nodeH, `${e.exten.replace(/^_/, "")}  ${e.label}`, [e.only ? `only from ${e.only}` : ""]);
+    edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
+    if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
+  });
+  nodes += node(X[3], bridgeY, Wd[3], nodeH, "Bridge", [`${ports.filter(p => p.up).length}/${ports.length} ports up`, `VAD: ${st.services.vad}`], bridgeUp ? "ok" : "bad");
+  svc.forEach((s, i) => {
+    const yy = y(i, svc.length);
+    nodes += node(X[4], yy, Wd[4], nodeH, s.t, [clip(s.s, 30)], s.up === false ? "bad" : s.up ? "ok" : "");
+    edges += curve(X[3] + Wd[3], bridgeY + nodeH / 2, X[4], yy + nodeH / 2, s.up === false ? "bad" : "ok");
+  });
+  svg.setAttribute("viewBox", `0 0 ${X[4] + Wd[4] + 10} ${H}`);
+  svg.innerHTML = out + edges + nodes;
+}
+function renderTables(st) {
+  const subs = st.subscriptions;
+  $("#devices").innerHTML = "<tr><th></th><th>Ext</th><th>Device</th><th>Address</th><th>Security</th><th>Voicemail light</th></tr>" +
+    st.endpoints.map(ep => {
+      const c = st.contacts.find(c => c.endpoint === ep.name);
+      const sub = subs.find(s => s.endpoint === ep.name);
+      return `<tr><td><span class="dot ${c ? (c.status === "Reachable" ? "ok" : "bad") : ""}"></span></td>
+        <td><strong>${esc(ep.name)}</strong><div class="muted">${esc(ep.callerid)}</div></td>
+        <td>${c ? esc(uaShort(c.user_agent)) + `<div class="muted">${c.rtt_ms} ms${c.push ? ' · <span class="tag warn">push</span>' : ""}</div>` : '<span class="muted">not registered</span>'}</td>
+        <td class="mono">${c ? esc(c.ip + ":" + c.port) : ""}</td>
+        <td>${c ? `<span class="tag ${c.transport === "TLS" ? "ok" : ""}">${c.transport}</span>` : ""}<span class="tag ${ep.encryption !== "no" ? "ok" : ""}">${ep.encryption === "no" ? "RTP" : "SRTP"}</span></td>
+        <td>${ep.mailboxes ? (sub ? '<span class="tag ok">subscribed</span>' : '<span class="tag warn">not subscribed</span>') : '<span class="muted">—</span>'}</td></tr>`;
+    }).join("");
+  const s = st.services;
+  const row = (up, name, detail) => `<tr><td><span class="dot ${up === null || up === undefined ? "" : up ? "ok" : "bad"}"></span></td><td>${esc(name)}</td><td class="muted">${esc(detail)}</td></tr>`;
+  $("#services").innerHTML = s.bridge.map(p => row(p.up, `Bridge: ${p.name}`, `port ${p.port}`)).join("") +
+    row(s.gateway.up, "Gateway", s.gateway.detail || s.gateway.url) +
+    row(s.stt.up, "Speech-to-text", `${s.stt.engine} ${s.stt.url || ""}`) +
+    s.tts.map(t => row(t.up, `Text-to-speech: ${t.name}`, `${t.type} ${t.url}`)).join("") +
+    row(null, "Speech detection", s.vad) + row(null, "Trigger words", s.keywords) +
+    row(null, "Voicemail notifications", s.notify.join(", ") || "off");
+  const mwi = st.mwi.map(m => `<div><span class="dot ${m.new ? "warn" : "ok"}"></span> ${esc(m.mailbox)}: <strong>${m.new}</strong> new, ${m.old} old</div>`).join("");
+  $("#calls").innerHTML = (st.channels.length ? "<table><tr><th>Channel</th><th>From</th><th>To</th><th>For</th></tr>" +
+    st.channels.map(c => `<tr><td class="mono">${esc(c.channel)}</td><td>${esc(c.caller)}</td><td>${esc(c.exten)} <span class="muted">${esc(c.app)}</span></td><td>${esc(c.duration)}</td></tr>`).join("") + "</table>"
+    : '<div class="muted">No calls in progress.</div>') +
+    `<div style="margin-top:10px">${mwi || '<span class="muted">No mailbox.</span>'}</div>` +
+    `<div class="muted" style="margin-top:6px">${st.asterisk.processed ?? 0} calls since ${esc(st.asterisk.started || "")}</div>`;
+  $("#dialplan").innerHTML = "<tr><th>Context</th><th>Extension</th><th>Does</th></tr>" + st.dialplan.map(d =>
+    d.extensions.map((e, i) => `<tr><td>${i ? "" : esc(d.context)}</td><td class="mono">${esc(e.exten)}</td><td class="mono muted">${
+      esc(e.steps.filter(s => !/^(NoOp|Hangup)$/.test(s.app)).slice(0, 4).map(s => s.app).join(" → "))}</td></tr>`).join("")).join("");
+}
+async function refresh() {
+  try {
+    const st = await api("/api/status");
+    status = st;
+    const bad = st.errors.length || !st.services.gateway.up || st.services.bridge.some(p => !p.up);
+    $("#hdot").className = "dot " + (bad ? "warn" : "ok");
+    $("#hsub").textContent = `${st.host} · Asterisk ${st.asterisk.version || "?"} · ${st.contacts.length} device(s) registered`;
+    if (tab === "overview") { renderDiagram(st); renderTables(st); }
+  } catch (e) {
+    $("#hdot").className = "dot bad";
+    $("#hsub").textContent = "can't reach the PBX: " + e.message;
+  }
+}
+
+// Logs
+let src = store.get("logsrc", "asterisk"), es = null, lines = [];
+const MAX = 5000;
+function lineHTML(l) {
+  const f = $("#logfilter").value.trim();
+  if ($("#problems").checked && !/WARNING|ERROR|Traceback|failed|warning/i.test(l)) return null;
+  if (f && !l.toLowerCase().includes(f.toLowerCase())) return null;
+  const cls = /ERROR|Traceback|Exception/.test(l) ? "l-err" : /WARNING|NOTICE|failed|refused|Unreachable/.test(l) ? "l-warn" : /^\S+ \S+\s+(--|==)|^\[\d/.test(l) ? "l-dim" : "";
+  let h = esc(l);
+  if (f) h = h.replace(new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), m => `<mark>${m}</mark>`);
+  return `<div class="${cls}">${h}</div>`;
+}
+function renderLogs() {
+  const box = $("#loglines");
+  box.innerHTML = lines.map(lineHTML).filter(Boolean).join("");
+  $("#logcount").textContent = `${lines.length} lines`;
+  box.scrollTop = box.scrollHeight;
+}
+function addLine(l) {
+  lines.push(l);
+  if (lines.length > MAX) lines.splice(0, lines.length - MAX);
+  const box = $("#loglines"), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const h = lineHTML(l);
+  if (h) { box.insertAdjacentHTML("beforeend", h); if (box.childElementCount > MAX) box.firstElementChild.remove(); }
+  $("#logcount").textContent = `${lines.length} lines`;
+  if (atEnd) box.scrollTop = box.scrollHeight;
+}
+function stopLogs() { if (es) { es.close(); es = null; } }
+async function startLogs() {
+  stopLogs();
+  document.querySelectorAll("#logsrc button").forEach(b => b.classList.toggle("on", b.dataset.src === src));
+  lines = [];
+  $("#loglines").innerHTML = '<div class="l-dim">loading…</div>';
+  if ($("#live").checked) {
+    $("#loglines").innerHTML = "";
+    es = new EventSource(`/api/logs?source=${src}&lines=500&follow=1`);
+    es.onmessage = ev => { const l = JSON.parse(ev.data); if (l !== null) addLine(l); };
+    es.onerror = () => { if (es && es.readyState === EventSource.CLOSED) addLine("(disconnected)"); };
+  } else {
+    try { lines = (await api(`/api/logs?source=${src}&lines=2000`)).lines; renderLogs(); }
+    catch (e) { $("#loglines").innerHTML = `<div class="l-err">${esc(e.message)}</div>`; }
+  }
+}
+document.querySelectorAll("#logsrc button").forEach(b => b.onclick = () => { src = b.dataset.src; store.set("logsrc", src); startLogs(); });
+$("#live").onchange = startLogs;
+$("#logfilter").oninput = renderLogs;
+$("#problems").onchange = renderLogs;
+$("#logclear").onclick = () => { lines = []; renderLogs(); };
+
+// Configuration
+let files = [], current = null, loaded = "";
+async function loadFiles() {
+  try { files = (await api("/api/config")).files; } catch (e) { $("#files").innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
+  const empty = $("#showempty").checked;
+  $("#files").innerHTML = files.filter(f => empty || !f.empty).map(f =>
+    `<li data-kind="${f.kind}" data-name="${esc(f.name)}" class="${current && current.name === f.name && current.kind === f.kind ? "on" : ""}">
+      <span class="${f.empty ? "empty" : ""}">${f.kind === "token-ring" ? "token-ring: " : ""}${esc(f.name)}</span>
+      <span>${f.edited ? '<span class="tag warn">edited</span>' : ""}${f.image_new ? '<span class="tag bad">image changed</span>' : ""}</span></li>`).join("");
+  document.querySelectorAll("#files li").forEach(li => li.onclick = () => openFile(li.dataset.kind, li.dataset.name));
+  if (!current && files.length) openFile(files[0].kind, files[0].name);
+}
+$("#showempty").onchange = loadFiles;
+async function openFile(kind, name, keepResult) {
+  const ed = $("#editor");
+  if (current && ed.value !== loaded && !ed.readOnly && !confirm("Discard your unsaved changes?")) return;
+  const raw = adv.checked;
+  let f;
+  try { f = await api(`/api/config/${kind}/${encodeURIComponent(name)}${raw ? "?raw=1" : ""}`); }
+  catch (e) { $("#cfgnote").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  current = f; loaded = f.content;
+  document.querySelectorAll("#files li").forEach(li => li.classList.toggle("on", li.dataset.name === name && li.dataset.kind === kind));
+  $("#cfgname").textContent = (kind === "token-ring" ? "token-ring: " : "") + name;
+  const meta = files.find(x => x.kind === kind && x.name === name) || {};
+  $("#cfgtags").innerHTML = (meta.edited ? '<span class="tag warn">edited here</span>' : "") + (meta.image_new ? '<span class="tag bad">image has a newer version</span>' : "");
+  ed.value = f.content; ed.readOnly = !raw;
+  ["#save", "#revert", "#restart"].forEach(s => $(s).hidden = !raw);
+  $("#restart").hidden = !raw || kind !== "asterisk";
+  $("#imagever").hidden = !raw || !f.image;
+  const sel = $("#backups");
+  sel.hidden = !raw || !f.backups.length;
+  sel.innerHTML = '<option value="">Backups…</option>' + f.backups.map(b => `<option>${esc(b)}</option>`).join("");
+  $("#cfgnote").innerHTML = raw
+    ? `Editing <span class="mono">${esc(f.path)}</span>. Saving keeps the previous version${f.reload ? `, then runs <span class="mono">${esc(f.reload)}</span>` : f.kind === "token-ring" ? "; token-ring picks it up by itself" : ""}.`
+    : `Read-only, passwords hidden. Switch on <strong>Advanced</strong> to edit.`;
+  if (kind === "token-ring") $("#cfgnote").innerHTML += " This is the PBX's copy (the bridge and this page); the gateway reads its own on the AI's machine.";
+  if (!keepResult) $("#result").hidden = true;
+}
+$("#editor").addEventListener("keydown", e => {
+  if (e.key === "Tab" && !e.target.readOnly) {
+    e.preventDefault();
+    const t = e.target, s = t.selectionStart;
+    t.setRangeText("    ", s, t.selectionEnd, "end");
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (!$("#save").hidden) save(); }
+});
+async function save() {
+  const res = $("#result");
+  res.hidden = false; res.innerHTML = "Saving…";
+  $("#save").disabled = true;
+  try {
+    const r = await api(`/api/config/${current.kind}/${encodeURIComponent(current.name)}`, {method: "PUT", body: JSON.stringify({content: $("#editor").value})});
+    loaded = $("#editor").value;
+    res.innerHTML = !r.changed ? "No changes." : `<strong>Saved.</strong> ${esc(r.reload || "")}` +
+      (r.restart ? ' <button class="btn danger" onclick="restart()">Restart Asterisk now</button>' : "") +
+      (r.warnings && r.warnings.length ? `<pre class="err">${esc(r.warnings.join("\n"))}</pre>` : (r.warnings ? '<div class="muted">No warnings logged.</div>' : ""));
+    await loadFiles();
+  } catch (e) { res.innerHTML = `<span class="err">Not saved: ${esc(e.message)}</span>`; }
+  $("#save").disabled = false;
+}
+$("#save").onclick = save;
+$("#revert").onclick = () => { $("#editor").value = loaded; $("#result").hidden = true; };
+$("#imagever").onclick = () => { if (current.image != null && confirm("Load the image's version into the editor? (Nothing is saved until you press Save.)")) $("#editor").value = current.image; };
+$("#backups").onchange = async e => {
+  const b = e.target.value; e.target.value = "";
+  if (!b) return;
+  const r = await api(`/api/config/${current.kind}/${encodeURIComponent(current.name)}/backup/${encodeURIComponent(b)}`);
+  $("#editor").value = r.content;
+  $("#result").hidden = false; $("#result").textContent = `Loaded ${b} into the editor: press Save to put it back.`;
+};
+async function restart() {
+  if (!confirm("Restart Asterisk? It waits for calls in progress to finish; phones re-register within a minute.")) return;
+  const r = await api("/api/asterisk/restart", {method: "POST"}).catch(e => ({reload: e.message}));
+  $("#result").hidden = false; $("#result").textContent = r.reload;
+}
+$("#restart").onclick = restart;
+window.restart = restart;
+
+showTab(tab);
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

@@ -1,7 +1,8 @@
 # The token-ring bridge, beside Asterisk. Speech-to-text and text-to-speech are other services
 # (see compose.yaml); trigger words use the small English Vosk model built in here ([keywords]).
 # Build from the repository root:  docker build -f docker/bridge/Dockerfile -t token-ring-bridge .
-# Your own image: FROM this, COPY your config.toml to /etc/token-ring/config.toml.
+# Your own image: FROM this, COPY your config.toml to /usr/share/token-ring/config.toml (brought
+# into /etc/token-ring at each start, where the web page edits it; edits made there are kept).
 FROM python:3.13-slim-trixie
 ARG UID=1000
 ARG VOSK_MODEL=vosk-model-small-en-us-0.15
@@ -19,8 +20,9 @@ RUN chmod 644 /opt/silero/silero_vad.onnx && pip install --no-cache-dir numpy so
 COPY pyproject.toml README.md LICENSE /src/
 COPY src /src/src
 RUN pip install --no-cache-dir /src && rm -rf /src
-COPY config.example.toml /etc/token-ring/config.toml
-RUN groupadd --gid ${UID} token-ring && useradd --uid ${UID} --gid ${UID} --no-create-home token-ring
+COPY config.example.toml /usr/share/token-ring/config.toml
+RUN groupadd --gid ${UID} token-ring && useradd --uid ${UID} --gid ${UID} --no-create-home token-ring \
+    && mkdir -p /etc/token-ring /var/log/token-ring && chown token-ring:token-ring /etc/token-ring /var/log/token-ring
 USER token-ring
 # Shares /var/spool/asterisk with the Asterisk container (call files); host networking
 CMD ["token-ring-bridge"]

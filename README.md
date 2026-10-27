@@ -73,6 +73,7 @@ git clone https://github.com/abagonhishead/token-ring && cd token-ring
 cp config.example.toml config.toml        # then edit it: [user], [stt], [voices], [backends]
 mkdir -p secrets && openssl rand -hex 32 > secrets/token
 printf '[token-ring]\nsecret = %s\nread = user\nwrite = message,command,call\n' "$(openssl rand -hex 24)" > secrets/manager_auth.conf
+printf '[token-ring-web]\nsecret = %s\nread = system,call,reporting\nwrite = system,call,reporting,config,command\ndisplayconnects = no\n' "$(openssl rand -hex 24)" >> secrets/manager_auth.conf
 cat > secrets/pjsip_auth.conf <<'END'
 [100](auth-template)
 username = 100
@@ -116,14 +117,18 @@ The images are generic. For your own setup, build on them rather than mounting f
 
 ```dockerfile
 FROM token-ring-bridge
-COPY config.toml /etc/token-ring/config.toml
+COPY config.toml /usr/share/token-ring/config.toml
 ```
 
 ```dockerfile
 FROM token-ring-asterisk
-COPY my-asterisk/ /etc/asterisk/
-RUN sed -i 's/^country=.*/country=uk/' /etc/asterisk/indications.conf
+COPY my-asterisk/ /usr/share/asterisk-etc/
+RUN sed -i 's/^country=.*/country=uk/' /usr/share/asterisk-etc/indications.conf
 ```
+
+The images keep their configuration in `/usr/share`; each start brings it into `/etc/asterisk` and
+`/etc/token-ring` (volumes, which the web page edits). A file edited there is kept when a new image
+comes along, and the image's new version is left beside it as `<name>.image-new`.
 
 ```dockerfile
 FROM token-ring-piper
@@ -131,6 +136,22 @@ RUN python -m piper.download_voices --data-dir /voices en_GB-semaine-medium
 ```
 
 Secrets (the gateway token, SIP passwords) stay outside the images, as compose secrets.
+
+## The web page
+
+`docker compose up -d` also starts a web page for the PBX, on port 8443 (HTTPS with the
+certificate in `./tls`, otherwise plain HTTP):
+
+- **Overview:** a diagram of the registered phones, Asterisk, the extensions and the services,
+  with each phone's app, address, encryption and voicemail-light subscription, calls in progress
+  and the voicemail counts.
+- **Logs:** Asterisk's, the bridge's and the gateway's, live, with a filter.
+- **Configuration:** Asterisk's files and token-ring's config, passwords hidden. Switch on
+  **Advanced** to edit them: saving keeps the previous version and reloads what changed, and shows
+  what Asterisk logged about it.
+
+It has no login yet, so keep it to your LAN or VPN. It uses its own Asterisk manager login,
+`token-ring-web` (the second section in `secrets/manager_auth.conf`).
 
 ## Configuration
 

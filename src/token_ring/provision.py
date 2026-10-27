@@ -8,8 +8,9 @@
 Opening the link on the phone shows a button that hands the settings to Linphone, which applies
 them and forgets the address (or paste the address into Linphone's remote provisioning setting).
 The settings are the account (registrar [provision] name, its new password, a display name
-from [provision.names], the voicemail button dialling [bridge] voicemail_extension) and, with
-TLS, mandatory SRTP. The address works once, and for [provision] wait_minutes at most; the old
+from [provision.names], the voicemail button dialling [bridge] voicemail_extension, the
+voicemail light, push notifications off and the app kept running so it stays registered) and,
+with TLS, mandatory SRTP. The address works once, and for [provision] wait_minutes at most; the old
 password stops working straight away, so run it again if the phone didn't fetch it.
 
 It writes the password into [provision] auth_file (the pjsip.conf include with the extensions'
@@ -100,7 +101,10 @@ def linphone_xml(ext, password, c, voicemail=""):
                     # the voicemail light: subscribe to this extension's mailbox (pjsip.conf)
                     "mwi_server_uri": f"sip:{ext}@{host}",
                     # and the app's voicemail button dials this
-                    **({"voicemail_uri": f"sip:{voicemail}@{host}"} if voicemail else {})},
+                    **({"voicemail_uri": f"sip:{voicemail}@{host}"} if voicemail else {}),
+                    # Asterisk can't wake the app with a push notification: stay registered instead
+                    "push_notification_allowed": 0, "remote_push_notification_allowed": 0},
+        "app": {"keep_service_alive": 1, "auto_start": 1},
         "auth_info_0": {"username": ext, "userid": ext, "passwd": password, "domain": host},
         "misc": {"transient_provisioning": 1},  # apply once, then forget the address
     }

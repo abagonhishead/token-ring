@@ -36,6 +36,7 @@ DEFAULTS = {
         "ami_secret": "",              # or ami_secret_file (a manager.conf section with secret =)
         "ami_secret_file": "/run/secrets/manager_auth.conf",
         "text_from": "201",            # who voicemail texts appear to come from
+        "log_file": "",                # also log here (the web page reads it)
         "mailbox": "",                 # for the voicemail light ("": <phone's endpoint>@token-ring)
     },
     "gateway": {
@@ -65,6 +66,17 @@ DEFAULTS = {
     "vad": {"engine": "energy", "model": "", "threshold": 0.5, "near_db": 12, "min_level_db": -100},
     "pronunciations": {},
     "notify": {"via": [], "remind_every_minutes": 60, "preview": True, "preview_chars": 160, "ntfy": {}},
+    "web": {
+        "listen": "0.0.0.0",
+        "port": 8443,
+        "cert_file": "/tls/fullchain.pem",   # HTTPS when both exist
+        "key_file": "/tls/privkey.pem",
+        "ami_user": "token-ring-web",        # its own manager login (in [bridge] ami_secret_file)
+        "asterisk_dir": "/etc/asterisk",
+        "asterisk_log": "/var/log/asterisk/full.log",
+        "bridge_log": "/var/log/token-ring/bridge.log",
+        "rotate_mb": 5,
+    },
     "provision": {
         "name": "",                    # the host name phones register to (in the certificate)
         "sip_port": 5061,
@@ -81,6 +93,53 @@ DEFAULTS = {
         "names": {},                   # extension -> the account's display name
     },
 }
+
+
+IMAGE_DIR = "/usr/share/token-ring"   # in the containers: the image's config.toml
+LIVE_DIR = "/etc/token-ring"          # the one in use (a volume, which the web page edits)
+
+
+def seed(image_dir=IMAGE_DIR, live_dir=LIVE_DIR):
+    """Containers: bring the image's files (config.toml) into the live directory. A file that's
+    missing, or still what an earlier image had (not edited since), takes the image's; one edited
+    here is kept, and the image's version is left beside it as <name>.image-new. Records what each
+    image had in <live_dir>/.image. A file with no record (mounted from outside) is never touched.
+    Returns {name: "seeded" | "updated" | "kept edit" | "unchanged"}."""
+    out = {}
+    if not os.path.isdir(image_dir):
+        return out
+    record = os.path.join(live_dir, ".image")
+    for name in sorted(os.listdir(image_dir)):
+        src, live, base = (os.path.join(image_dir, name), os.path.join(live_dir, name),
+                           os.path.join(record, name))
+        if not os.path.isfile(src):
+            continue
+        try:
+            new = open(src, "rb").read()
+            have = open(live, "rb").read() if os.path.exists(live) else None
+            was = open(base, "rb").read() if os.path.exists(base) else None
+            if have is not None and was is None:
+                out[name] = "unchanged"   # not ours to manage
+                continue
+            os.makedirs(record, exist_ok=True)
+            if have == new:
+                out[name] = "unchanged"   # (perhaps edited here to just what the image now has)
+            elif have is None or have == was:
+                if have != new:
+                    with open(live, "wb") as f:
+                        f.write(new)
+                out[name] = "seeded" if have is None else ("updated" if have != new else "unchanged")
+            else:
+                out[name] = "kept edit"
+                if new != was:
+                    with open(live + ".image-new", "wb") as f:
+                        f.write(new)
+                    log.warning("%s: edited here, and the image has a new version (%s.image-new)", live, name)
+            with open(base, "wb") as f:
+                f.write(new)
+        except OSError as e:
+            log.warning("config seed %s: %s", name, e)
+    return out
 
 
 def path():
