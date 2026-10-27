@@ -57,7 +57,8 @@ In a session:
 
 Sessions ring you with `token-ring call "message"` and leave voicemail with `token-ring voicemail
 "message"`. With `[notify]`, a new voicemail also sends a text message to your phone
-(or an ntfy notification), with a reminder every hour while it's unheard. When you answer, you hear the message and you're talking to the session that rang.
+(or an ntfy notification), with a reminder every hour while it's unheard. Text 200 from the phone's
+chat and the operator answers by text: ask it to have a session ring you back. When you answer, you hear the message and you're talking to the session that rang.
 `docs/agents.md` is what to tell your agents about it.
 
 ## Quick start (containers)

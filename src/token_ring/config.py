@@ -35,7 +35,7 @@ DEFAULTS = {
         "ami_user": "token-ring",
         "ami_secret": "",              # or ami_secret_file (a manager.conf section with secret =)
         "ami_secret_file": "/run/secrets/manager_auth.conf",
-        "text_from": "201",            # who texts appear to come from
+        "text_from": "201",            # who voicemail texts appear to come from
     },
     "gateway": {
         "host": "127.0.0.1",
@@ -51,6 +51,7 @@ DEFAULTS = {
         "labels": {},                  # session key -> how it's said ("rc" = "general use")
         "operator_prompt": "",         # appended to the operator's built-in instructions
         "session_prompt": "",          # appended to new phone sessions' instructions
+        "text_operator": "200",        # texts to this extension go to the operator ("" for none)
     },
     "backends": {},
     "stt": {"engine": "openai"},

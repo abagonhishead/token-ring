@@ -119,7 +119,7 @@ def on_outbound(ev, done):
     if "lost" in ev:
         done.set()
     elif "text" in ev:
-        asyncio.create_task(send_text(ev["id"], ev["text"]))
+        asyncio.create_task(send_text(ev["id"], ev["text"], ev.get("from")))
     elif "call" in ev:
         call_id = ev["call"]
         try:
@@ -201,7 +201,7 @@ async def reachable(endpoint):
     return any(re.match(rf"\s*Contact:\s+{re.escape(endpoint)}/\S+\s+\S+\s+(Avail|NonQual)\b", l) for l in out)
 
 
-async def send_text(text_id, text):
+async def send_text(text_id, text, sender=None):
     phone = bridge_conf()["phone"]
     status = "failed"
     try:
@@ -212,7 +212,7 @@ async def send_text(text_id, text):
             status = "unreachable"
         else:
             resp = await ami_action({"Action": "MessageSend", "To": f"pjsip:{endpoint}",
-                                     "From": bridge_conf()["text_from"],
+                                     "From": sender or bridge_conf()["text_from"],
                                      "Base64Body": base64.b64encode(text.encode()).decode()})
             status = "sent" if resp.get("Response") == "Success" else "failed"
             if status == "failed":
@@ -241,7 +241,8 @@ async def text_replies_loop():
                     body = base64.b64decode(ev.get("Body", "")).decode(errors="replace")
                     log.info("text from %s to %s: %r", ev.get("From"), ev.get("To"), body[:80])
                     await asyncio.get_running_loop().run_in_executor(
-                        None, gateway().call, "POST", "/texts/reply", {"from": ev.get("From", ""), "body": body})
+                        None, gateway().call, "POST", "/texts/reply",
+                        {"from": ev.get("From", ""), "to": ev.get("To", ""), "body": body})
         except Exception as e:
             if not warned:
                 log.warning("texts: no AMI connection (%s); retrying", e)

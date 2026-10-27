@@ -71,6 +71,14 @@ read aloud by text-to-speech:
 - When the conversation's over (they say goodbye or ask you to hang up), say goodbye and run
   `token-ring hangup`: the call ends once your goodbye has been spoken.
 
+### Ring-back requests
+
+They can text the phone operator to ask you to ring them back. That arrives as a message
+starting `[Message from <name>, sent by text through the phone operator: they'd like you to ring
+them back ...]`, with what they want to talk about. When you're at a good point, ring them with
+`token-ring call`, opening with what it's about. If it can wait or it's late, leave a voicemail
+instead.
+
 ### Voicemail from them
 
 Their voicemails arrive as a message starting `[Voicemail from <name>, through speech-to-text

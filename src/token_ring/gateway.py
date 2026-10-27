@@ -54,9 +54,13 @@ through Asterisk; the outbound feed carries {"text", "id"}) and/or an ntfy notif
 
   POST /texts/<id>               {"status": "sent" | "unreachable" | "failed"}: the bridge
                                  reporting on a text
-  POST /texts/reply              {"from", "body"}: the user texted back, which stops reminders
-                                 until there's new voicemail (Asterisk can't pass on Linphone's
-                                 read receipts, so a reply stands in for one)
+  POST /texts/reply              {"from", "to", "body"}: the user texted the PBX. Any text stops
+                                 reminders until there's new voicemail (Asterisk can't pass on
+                                 Linphone's read receipts, so a reply stands in for one); texts
+                                 to [gateway] text_operator go to the text operator, whose
+                                 replies are texted back from that extension
+  POST /sessions/<key>/callback  {"text"}, local only: ask the session to ring the user back
+                                 (`token-ring callback`); typed in when it's free, like voicemail
 
 Voicemail (text: read out in the sender's voice). Messages for the user are in
 <data_dir>/voicemail/inbox, theirs for sessions in outbox until delivered:
@@ -97,6 +101,7 @@ MAX_TEXT = 2000
 PING_EVERY_S = 5.0
 VM_RETRY_S = 30
 NOTIFY_RETRY_S = 60
+TEXT_OPERATOR_IDLE_S = 600
 TEXT_WAIT_S = 20
 
 log = logging.getLogger("token-ring")
@@ -159,6 +164,24 @@ def vm_prefix():
             "them with `token-ring call` if it's urgent] ")
 
 
+def text_operator_prompt():
+    return f"""You're the phone operator for this machine's sessions, reached by text message from \
+{user()}'s phone. Whatever you write is sent back to them as one text message when you finish, so \
+keep it to a sentence or two of plain text: no Markdown, lists or code. Mostly they'll want a \
+session to ring them back:
+- `token-ring list` lists the sessions (key, status, name).
+- `token-ring callback <key> "<what they want to talk about>"` asks that session to ring them; \
+it's passed on as soon as the session is free, and the session rings when it's ready.
+If it's unclear which session they mean, ask. Say briefly what you did.
+""" + gateway_conf().get("operator_prompt", "")
+
+
+def callback_prefix():
+    return (f"[Message from {user()}, sent by text through the phone operator: they'd like you to "
+            "ring them back. Ring with `token-ring call \"...\"`, opening with what it's about, once "
+            "you're ready; if it's late or it can wait, leave a voicemail instead] ")
+
+
 def clean(text):
     return re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()[:MAX_TEXT]
 
@@ -179,6 +202,7 @@ class Gateway:
         self.vm_deliver = threading.Event()
         self.notify_now = threading.Event()
         self.texts = {}             # id -> {"done": threading.Event, "status"}: texts the bridge is sending
+        self.text_op = None         # the text operator: {"agent", "ended", "last", "ready"}
 
     @property
     def backend(self):
@@ -233,7 +257,8 @@ class Gateway:
                     if not s or s.dialog():
                         continue  # down, or waiting on the user: try again later
                     with self.vm_lock:
-                        if not s.send(clean(vm_prefix() + item["text"])):
+                        prefix = callback_prefix() if item.get("kind") == "callback" else vm_prefix()
+                        if not s.send(clean(prefix + item["text"])):
                             continue
                         item["delivered"] = time.time()
                         self.vm_save("outbox", item)
@@ -311,14 +336,75 @@ class Gateway:
             json.dump(state, f)
         os.replace(path + ".tmp", path)
 
-    def text_reply(self, sender, body):
-        """The user texted back: counts as having read the last text (no more reminders until
-        there's new voicemail)."""
+    def text_reply(self, sender, body, to=""):
+        """The user texted the PBX: counts as having read the last text (no more reminders until
+        there's new voicemail). A text to the operator's extension goes to the text operator."""
         with self.lock:
             state = self.notify_state()
             state.setdefault("phone", {})["replied"] = time.time()
             self.save_notify_state(state)
-        log.info("text from %s: %r", sender, body[:80])
+        log.info("text from %s to %s: %r", sender, to, body[:80])
+        if to and to == self.text_operator_ext() and body.strip():
+            self.operator_text(body)
+
+    # The text operator: an operator conversation for texts to [gateway] text_operator, kept for
+    # TEXT_OPERATOR_IDLE_S after the last text so a back-and-forth works. What it says in a turn
+    # goes back as one text, from that extension.
+
+    def operator_text(self, body):
+        with self.lock:
+            op = self.text_op
+            start = op is None or op["ended"]
+            if start:
+                op = self.text_op = {"agent": None, "ended": False, "last": time.time(), "ready": threading.Event()}
+            op["last"] = time.time()
+        if start:
+            agent_id = uuid.uuid4().hex[:12]
+            try:
+                op["agent"] = self.backend.start(agent_id, "operator", text_operator_prompt(), "operator (text)")
+            except Exception as e:
+                op["ended"] = True
+                op["ready"].set()
+                log.warning("text operator: couldn't start: %s", e)
+                self.text_phone("Sorry, the operator couldn't start.", sender=self.text_operator_ext())
+                return
+            with self.lock:
+                self.agents[agent_id] = op["agent"]
+            op["ready"].set()
+            threading.Thread(target=self.text_operator_run, args=(op, agent_id), daemon=True).start()
+        op["ready"].wait(30)
+        if op["agent"]:
+            op["agent"].send(clean(f"[Text message from {user()}] {body}"))
+
+    @staticmethod
+    def text_operator_ext():
+        return str(gateway_conf().get("text_operator", ""))
+
+    def text_operator_run(self, op, agent_id):
+        agent, said = op["agent"], []
+        try:
+            while True:
+                try:
+                    ev = agent.events.get(timeout=5)
+                except queue.Empty:
+                    if time.time() - op["last"] > TEXT_OPERATOR_IDLE_S:
+                        break
+                    continue
+                if "say" in ev:
+                    said.append(ev["say"].strip())
+                elif ev.get("status") == "idle" and said:
+                    reply = re.sub(r"\s+", " ", " ".join(said)).strip()[:1000]
+                    said = []
+                    if not self.text_phone(reply, sender=self.text_operator_ext()):
+                        log.warning("text operator: couldn't text the reply %r", reply[:80])
+                elif ev.get("status") == "down":
+                    break
+        finally:
+            op["ended"] = True
+            with self.lock:
+                self.agents.pop(agent_id, None)
+            agent.close()
+            log.info("text operator: finished")
 
     def notice(self, fresh, conf):
         dial = self.dial()
@@ -350,9 +436,9 @@ class Gateway:
         log.warning("notify: unknown channel %r", via)
         return False
 
-    def text_phone(self, text):
-        """A text message to the phone, sent by the bridge through Asterisk. True once it's gone
-        to a registered phone."""
+    def text_phone(self, text, sender=None):
+        """A text message to the phone, sent by the bridge through Asterisk (from sender, else
+        [bridge] text_from). True once it's gone to a registered phone."""
         text_id = uuid.uuid4().hex[:12]
         pending = {"done": threading.Event(), "status": None}
         with self.lock:
@@ -360,7 +446,7 @@ class Gateway:
                 return False
             self.texts[text_id] = pending
             for q in self.outbound:
-                q.put({"text": text, "id": text_id})
+                q.put({"text": text, "id": text_id, **({"from": sender} if sender else {})})
         pending["done"].wait(TEXT_WAIT_S)
         with self.lock:
             self.texts.pop(text_id, None)
@@ -498,8 +584,8 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/agents/([0-9a-f]+)/(send|interrupt|connect|hangup)", self.path)
         if m:
             return self.agent_post(m.group(1), m.group(2), body)
-        if self.path.startswith("/voicemail"):
-            return self.voicemail_post(body)
+        if self.path.startswith("/voicemail") or re.fullmatch(r"/sessions/[A-Za-z0-9_-]+/callback", self.path):
+            return self.voicemail_post(body)  # (callbacks are delivered like voicemail)
         if self.path == "/whoami":
             if not self.local():
                 return self.reply(403, {"error": "local only"})
@@ -517,7 +603,8 @@ class Handler(BaseHTTPRequestHandler):
             call_id, why = G.place_call(key, re.sub(r"\s+", " ", message).strip()[:600])
             return self.reply(200, {"id": call_id}) if call_id else self.reply(409, {"error": why})
         if self.path == "/texts/reply":  # the user texted the PBX (the bridge passes it on)
-            G.text_reply(str(body.get("from", "")), str(body.get("body", "")))
+            threading.Thread(target=G.text_reply, args=(str(body.get("from", "")), str(body.get("body", "")),
+                                                         str(body.get("to", ""))), daemon=True).start()
             return self.reply(200, {"ok": True})
         m = re.fullmatch(r"/texts/([0-9a-f]+)", self.path)
         if m:  # the bridge reporting on a text message
@@ -603,6 +690,21 @@ class Handler(BaseHTTPRequestHandler):
             G.vm_save("inbox", item)
             G.notify_now.set()
             log.info("voicemail %s from %s: %r", item["id"], key, item["text"][:80])
+            return self.reply(200, {"id": item["id"]})
+        m = re.fullmatch(r"/sessions/([A-Za-z0-9_-]+)/callback", self.path)
+        if m:  # `token-ring callback`: ask a session to ring the user back (local only)
+            if not self.local():
+                return self.reply(403, {"error": "local only"})
+            key, text = m.group(1), body.get("text")
+            if not G.known(key):
+                return self.reply(404, {"error": f"no session {key}"})
+            if not isinstance(text, str) or not text.strip():
+                return self.reply(400, {"error": "text required"})
+            item = {"id": uuid.uuid4().hex[:12], "to": key, "kind": "callback", "text": text.strip()[:MAX_TEXT],
+                    "at": time.time()}
+            G.vm_save("outbox", item)
+            G.vm_deliver.set()
+            log.info("callback %s for %s: %r", item["id"], key, item["text"][:80])
             return self.reply(200, {"id": item["id"]})
         m = re.fullmatch(r"/voicemail/to/([A-Za-z0-9_-]+)", self.path)
         if m:  # the user leaving a session a message, from the phone

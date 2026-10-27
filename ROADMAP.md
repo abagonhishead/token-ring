@@ -11,10 +11,10 @@ Ideas and known gaps, roughly in order of how much they'd help. Nothing here is 
 - **Encrypted calls.** SIP over TLS (port 5061) and SRTP (SDES or DTLS) for the phones, so
   "encrypt everything" in a softphone works. Today calls are plain SIP and RTP: fine inside a
   VPN, not on an open network.
-- **Texting sessions.** Text a session from the phone's chat (SIP MESSAGE) instead of calling:
-  the replies come back as texts, multiple-choice questions as numbered lists. Sessions can
-  text you with `token-ring text`. The plumbing for texts both ways already exists for voicemail
-  notifications.
+- **Texting sessions.** Text a session directly from the phone's chat (SIP MESSAGE) instead of
+  calling: the replies come back as texts, multiple-choice questions as numbered lists. Sessions
+  can text you with `token-ring text`. Texting the operator (200) already works, and asks
+  sessions to ring you back; this extends it to the sessions themselves.
 
 ## Later
 

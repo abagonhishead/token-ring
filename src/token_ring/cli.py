@@ -11,6 +11,8 @@
                                    to 90 s for one that's just been started)
   token-ring connect --new <key>   operator only: a new conversation in that session's directory
   token-ring clear <key>           empty that session's input of unsent text (printed)
+  token-ring callback <key> "why"  ask that session to ring the user back (passed on as soon as
+                                   it's free; the text operator uses this)
 
 The gateway is $TOKEN_RING_URL, else this machine's [gateway] port. Which session this is comes
 from $TOKEN_RING_SESSION, else the gateway's backend (from the process tree); anything else
@@ -101,6 +103,12 @@ def main(argv=None):
         if code != 200:
             fail(code, body, "Not cleared")
         print(f"Cleared: {body['cleared']!r}" if body["cleared"] else "The input was already empty.")
+        return 0
+    if cmd == "callback" and len(rest) == 2 and rest[1].strip():
+        code, body = gw.call("POST", f"/sessions/{rest[0]}/callback", {"text": rest[1]})
+        if code != 200:
+            fail(code, body, "Not asked")
+        print(f"Asked {rest[0]} to ring them back; it's passed on as soon as the session is free.")
         return 0
     if cmd == "connect" and rest:
         new = rest[0] == "--new"

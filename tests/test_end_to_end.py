@@ -228,6 +228,7 @@ class FakeAMI:
     def __init__(self):
         self.reachable = False
         self.sent = []
+        self.froms = []
         self.listeners = []
 
     async def handle(self, reader, writer):
@@ -247,6 +248,7 @@ class FakeAMI:
                     writer.write(b"Response: Success\r\nMessage: Command output follows\r\n" + contact + b"\r\n")
                 elif action == "MessageSend":
                     self.sent.append(base64.b64decode(msg["Base64Body"]).decode())
+                    self.froms.append(msg.get("From"))
                     writer.write(b"Response: Success\r\nMessage: Message successfully sent\r\n\r\n")
                 elif action == "Logoff":
                     writer.close()
@@ -255,10 +257,10 @@ class FakeAMI:
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
 
-    def text_from_phone(self, body):
+    def text_from_phone(self, body, to="201"):
         for w in self.listeners:
             w.write(("Event: UserEvent\r\nUserEvent: TokenRingText\r\nFrom: <sip:100@10.0.0.5>\r\n"
-                     f"To: 201\r\nBody: {base64.b64encode(body.encode()).decode()}\r\n\r\n").encode())
+                     f"To: {to}\r\nBody: {base64.b64encode(body.encode()).decode()}\r\n\r\n").encode())
 
 
 def test_voicemail_texts(system, monkeypatch):
@@ -289,6 +291,23 @@ def test_voicemail_texts(system, monkeypatch):
 
         gw(ports, "POST", "/voicemail", {"key": "alpha", "message": "Deploy finished."})
         await until(lambda: any("from alpha: Deploy finished." in t for t in ami.sent))
+        assert set(ami.froms) == {"201"}
+
+        # Texting the operator: its reply comes back from 200
+        ami.text_from_phone("Ask beta to ring me about the build.", to="200")
+        await until(lambda: "200" in ami.froms)
+        assert ami.sent[ami.froms.index("200")] == "You said: [Text message from Tester] Ask beta to ring me about the build."
+
+        # A callback request reaches the session like voicemail, with its own prefix
+        gw(ports, "POST", "/sessions/beta/callback", {"text": "the build"})
+        from token_ring.backends.echo import EchoSession
+        seen = []
+        follower = EchoSession("beta").follow()
+        next(follower)
+        threading.Thread(target=gateway.G.vm_deliver_loop, daemon=True).start()
+        gateway.G.vm_deliver.set()
+        await until(lambda: seen.extend(next(follower)) or any("ring them back" in e.get("say", "") for e in seen))
+        follower.close()
         for t in tasks:
             t.cancel()
     asyncio.run(main())
