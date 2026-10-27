@@ -62,6 +62,7 @@ DEFAULTS = {
         "stop": ["stop", "hang on", "wait", "shush", "quiet"],
         "interrupt": ["cancel that"],
     }},
+    "vad": {"engine": "energy", "model": "", "threshold": 0.5, "near_db": 12, "min_level_db": -100},
     "pronunciations": {},
     "notify": {"via": [], "remind_every_minutes": 60, "preview": True, "preview_chars": 160, "ntfy": {}},
     "provision": {

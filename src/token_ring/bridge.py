@@ -33,7 +33,7 @@ import threading
 import time
 import uuid
 
-from . import config, plugins, spotter, stt, tts
+from . import config, plugins, spotter, stt, tts, vad
 from .audio import FRAME_BYTES, FRAME_MS, RATE, frame_db, tone
 from .http import Client
 from .text import match_session, pronounce, speakable, spoken_when
@@ -61,6 +61,20 @@ ACK = tone(880, 70, gap_ms=60) + tone(1175, 70)
 
 def bridge_conf():
     return config.section("bridge")
+
+
+# What Whisper and its kind tend to "hear" in noise or silence: dropped when that's all there is.
+# [stt] ignore adds more (compared without case or punctuation).
+NOT_SPEECH = {"you", "thank you", "thank you so much", "thank you very much", "thanks for watching",
+              "thank you for watching", "thanks for watching and see you next time", "please subscribe",
+              "subtitles by the amaraorg community", "uh", "um", "hmm", "mm", "mhm", "ah", "oh"}
+
+
+def not_speech(text):
+    """Whether a transcript is only something speech-to-text makes up from noise."""
+    t = re.sub(r"[^\w\s']", "", text.lower()).strip()
+    extra = {re.sub(r"[^\w\s']", "", x.lower()).strip() for x in config.section("stt").get("ignore", [])}
+    return t in NOT_SPEECH or t in extra
 
 
 def transcribe(pcm):
@@ -320,6 +334,9 @@ class Call:
         self.deaf_until = 0.0  # ignore caller audio until then (the rest of a trigger word)
         self.last_sound = time.monotonic()
         # Utterance detection state
+        self.vad = vad.create()
+        self.voice_db = None   # the caller's voice level on this call, once they've said something
+        self.level_dbs = []    # levels of the speech frames in the current utterance
         self.noise_db = -60.0
         self.loud_run = 0
         self.preroll = []
@@ -408,31 +425,64 @@ class Call:
         db = frame_db(frame)
         if self.utterance is None:
             self.preroll = (self.preroll + [frame])[-(PREROLL_MS // FRAME_MS):]
-            if db > self.noise_db + START_DB:
+            if self.is_speech(frame, db, True):
                 self.loud_run += 1
+                self.level_dbs.append(db)
                 if self.loud_run >= START_FRAMES:
                     self.utterance = bytearray(b"".join(self.preroll))
                     self.speech_ms, self.silence_ms = self.loud_run * FRAME_MS, 0
             else:
-                self.loud_run = 0
+                self.loud_run, self.level_dbs = 0, []
                 self.noise_db = 0.95 * self.noise_db + 0.05 * db  # track the background level
             return
         self.utterance += frame
-        if db > self.noise_db + START_DB - 5:
+        if self.is_speech(frame, db, False):
             self.speech_ms += FRAME_MS
             self.silence_ms = 0
+            self.level_dbs.append(db)
         else:
             self.silence_ms += FRAME_MS
         if self.silence_ms >= END_SILENCE_MS or len(self.utterance) >= MAX_UTTERANCE_S * RATE * 2:
             pcm, speech_ms = bytes(self.utterance), self.speech_ms
-            self.utterance, self.loud_run, self.preroll = None, 0, []
+            levels = sorted(self.level_dbs)
+            self.utterance, self.loud_run, self.preroll, self.level_dbs = None, 0, [], []
             if speech_ms >= MIN_SPEECH_MS:
                 self.transcribing = True
+                self.last_utterance = {"speech_ms": speech_ms, "level": levels[int(len(levels) * 0.9)]}
                 asyncio.create_task(self.heard(pcm))
 
+    def is_speech(self, frame, db, starting):
+        """Speech by the detector ([vad]), loud enough ([vad] min_level_db), and near the caller's
+        voice level: their level on this call once known, and within an utterance its loudest part
+        so far, so it ends when they stop even with a TV going on behind."""
+        if not self.vad.speech(frame, db - self.noise_db, starting):
+            return False
+        conf = config.section("vad")
+        slack = 0 if starting else 5
+        if db < conf.get("min_level_db", -100) - slack:
+            return False
+        ref = self.voice_db
+        if not starting and len(self.level_dbs) >= 10:
+            peak = sorted(self.level_dbs)[int(len(self.level_dbs) * 0.9)]
+            ref = peak if ref is None else max(ref, peak)
+        near = conf.get("near_db", 12)
+        return not (near and ref is not None and db < ref - near - slack)
+
+    def learned_voice(self, level):
+        """The level of an utterance that turned out to be words: the caller's voice. Goes up at
+        once (a TV heard first mustn't set it), down slowly."""
+        if self.voice_db is None or level > self.voice_db:
+            self.voice_db = level
+        else:
+            self.voice_db = 0.8 * self.voice_db + 0.2 * level
+        log.debug("%s voice level %.1f dB", self.uuid, self.voice_db)
+
     async def heard(self, pcm):
+        utterance = getattr(self, "last_utterance", {"speech_ms": 0, "level": None})
         try:
-            log.info("%s utterance: %.1f s", self.uuid, len(pcm) / 2 / RATE)
+            log.info("%s utterance: %.1f s, level %.0f dB (noise %.0f dB, voice %s)", self.uuid,
+                     len(pcm) / 2 / RATE, utterance["level"] or 0, self.noise_db,
+                     "unknown" if self.voice_db is None else f"{self.voice_db:.0f} dB")
             try:
                 text, took = await asyncio.get_running_loop().run_in_executor(None, transcribe, pcm)
             except Exception as e:  # network or engine failure: say so rather than go quiet
@@ -442,7 +492,15 @@ class Call:
             log.info("%s transcribed in %d ms: %r", self.uuid, took * 1000, text)
         finally:
             self.transcribing = False
-        await self.on_text(text.strip())
+        text = text.strip()
+        if not text or not_speech(text):
+            # noise, or what's made up from it: only ask again after a good second of speech
+            if utterance["speech_ms"] < 1000 or text:
+                log.info("%s ignored: %r", self.uuid, text)
+                return
+        elif utterance["level"] is not None:
+            self.learned_voice(utterance["level"])
+        await self.on_text("" if not_speech(text) else text)
 
     async def on_text(self, text):
         """Echo mode: say back what was heard."""
@@ -1033,7 +1091,7 @@ class Voicemail(Operator):
         self.transcribing = False
         try:
             text, _ = await asyncio.get_running_loop().run_in_executor(None, transcribe, pcm)
-            self.parts[seq] = text.strip()
+            self.parts[seq] = "" if not_speech(text) else text.strip()
             log.info("%s dictated %d: %r", self.uuid, seq, text)
         except Exception as e:
             log.warning("%s transcription failed: %s", self.uuid, e)

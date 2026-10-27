@@ -9,7 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-c
     && curl -fsSL -o /tmp/model.zip https://alphacephei.com/vosk/models/${VOSK_MODEL}.zip \
     && mkdir -p /opt/vosk && unzip -q /tmp/model.zip -d /opt/vosk && mv /opt/vosk/${VOSK_MODEL} /opt/vosk/model \
     && rm /tmp/model.zip && apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir numpy soxr vosk
+# Silero VAD ([vad] engine = "silero"), MIT licence
+ARG SILERO_VERSION=v5.1.2
+ARG SILERO_SHA256=2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f
+ADD --checksum=sha256:${SILERO_SHA256} \
+    https://github.com/snakers4/silero-vad/raw/${SILERO_VERSION}/src/silero_vad/data/silero_vad.onnx \
+    /opt/silero/silero_vad.onnx
+RUN chmod 644 /opt/silero/silero_vad.onnx && pip install --no-cache-dir numpy soxr vosk onnxruntime
 COPY pyproject.toml README.md LICENSE /src/
 COPY src /src/src
 RUN pip install --no-cache-dir /src && rm -rf /src

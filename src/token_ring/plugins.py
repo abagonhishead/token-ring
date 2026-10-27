@@ -3,7 +3,7 @@
 A `type` (or `engine`) in the config is one of:
   - a built-in name ("openai", "piper", "claude-code", ...),
   - the name of an installed plugin, registered as a Python entry point in the group
-    token_ring.stt, token_ring.tts, token_ring.spotters or token_ring.backends,
+    token_ring.stt, token_ring.tts, token_ring.spotters, token_ring.vad or token_ring.backends,
   - "package.module:ClassName".
 """
 import importlib
@@ -27,6 +27,10 @@ BUILTIN = {
         "vosk": "token_ring.spotter:VoskSpotter",
         "off": "token_ring.spotter:NoSpotter",
     },
+    "vad": {
+        "energy": "token_ring.vad:EnergyVAD",
+        "silero": "token_ring.vad:SileroVAD",
+    },
     "backends": {
         "claude-code": "token_ring.backends.claude_code:ClaudeCode",
         "echo": "token_ring.backends.echo:Echo",
@@ -35,7 +39,7 @@ BUILTIN = {
 
 
 def load(kind, name):
-    """The class for a plugin of kind ("stt", "tts", "spotters", "backends") called name."""
+    """The class for a plugin of kind ("stt", "tts", "spotters", "vad", "backends") called name."""
     target = BUILTIN[kind].get(name)
     if not target:
         found = [e for e in entry_points(group=f"token_ring.{kind}") if e.name == name]
