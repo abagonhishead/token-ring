@@ -40,6 +40,7 @@ flowchart LR
 | 200 | The AI. The operator answers: say "connect me to *session*", "new session in *session*" or "list sessions", or press 0 for a numbered list. Or just talk: the operator is an agent too |
 | 201 | Voicemail: messages sessions have left you (each read in that session's voice); press 2 to leave one for a session |
 | 601 | Speech echo: hear what speech-to-text made of what you said |
+| 602 | Ringback test: hang up after the beep and the PBX rings you back 15 s later (checks calls get through Do Not Disturb) |
 | 699 | Audio echo |
 
 In a session:
