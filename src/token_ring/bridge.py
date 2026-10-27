@@ -50,6 +50,7 @@ END_SILENCE_MS = 700
 PREROLL_MS = 300
 MIN_SPEECH_MS = 300
 MAX_UTTERANCE_S = 20
+REACH_WAIT_S = 15    # texts: how long to wait for a phone that's missed a qualify check
 
 log = logging.getLogger("token-ring")
 
@@ -208,6 +209,10 @@ async def send_text(text_id, text, sender=None):
         tech, _, endpoint = phone.partition("/")
         if tech.upper() != "PJSIP":
             raise ValueError(f"texts need a PJSIP phone, not {phone}")
+        # A phone on Wi-Fi sometimes misses a qualify check and comes back seconds later
+        deadline = time.monotonic() + REACH_WAIT_S
+        while not await reachable(endpoint) and time.monotonic() < deadline:
+            await asyncio.sleep(2)
         if not await reachable(endpoint):
             status = "unreachable"
         else:

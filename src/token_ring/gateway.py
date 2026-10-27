@@ -102,7 +102,8 @@ PING_EVERY_S = 5.0
 VM_RETRY_S = 30
 NOTIFY_RETRY_S = 60
 TEXT_OPERATOR_IDLE_S = 600
-TEXT_WAIT_S = 20
+TEXT_WAIT_S = 30           # the bridge waits up to 15 s for the phone
+TEXT_RETRY_S = 60
 
 log = logging.getLogger("token-ring")
 
@@ -395,8 +396,8 @@ class Gateway:
                 elif ev.get("status") == "idle" and said:
                     reply = re.sub(r"\s+", " ", " ".join(said)).strip()[:1000]
                     said = []
-                    if not self.text_phone(reply, sender=self.text_operator_ext()):
-                        log.warning("text operator: couldn't text the reply %r", reply[:80])
+                    threading.Thread(target=self.text_phone_until_sent, daemon=True,
+                                     args=(reply, self.text_operator_ext())).start()
                 elif ev.get("status") == "down":
                     break
         finally:
@@ -452,6 +453,16 @@ class Gateway:
             self.texts.pop(text_id, None)
         log.info("text %s: %s (%r)", text_id, pending["status"] or "no reply from the bridge", text[:60])
         return pending["status"] == "sent"
+
+    def text_phone_until_sent(self, text, sender=None, give_up_s=TEXT_OPERATOR_IDLE_S):
+        """text_phone, tried again every TEXT_RETRY_S while the phone's unreachable."""
+        deadline = time.time() + give_up_s
+        while not self.text_phone(text, sender=sender):
+            if time.time() > deadline:
+                log.warning("text: gave up on %r", text[:80])
+                return False
+            time.sleep(TEXT_RETRY_S)
+        return True
 
     def ntfy(self, text, c):
         """POST to an ntfy topic (https://ntfy.sh, or your own server), which keeps it until the
