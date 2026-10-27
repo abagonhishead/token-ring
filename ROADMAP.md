@@ -13,6 +13,12 @@ Ideas and known gaps, roughly in order of how much they'd help. Nothing here is 
   can text you with `token-ring text`. Texting the operator (200) already works, and asks
   sessions to ring you back; this extends it to the sessions themselves.
 
+- **Reaching a phone that's asleep.** Android softphones without push (Linphone with your own
+  server) answer late while the phone sleeps, so Asterisk marks them unreachable and calls fail.
+  Before ringing, wait for the phone to come back; if it doesn't, ring its mobile number through a
+  SIP trunk instead (an unanswered call costs nothing, and you can call back on the softphone).
+  A push through ntfy might also wake it.
+
 ## Later
 
 - **Read receipts for texts.** Linphone sends IMDN receipts (in CPIM), but Asterisk only accepts
