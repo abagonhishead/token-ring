@@ -44,8 +44,9 @@ RUN sed -i '/^run\(user\|group\)/d' /etc/asterisk/asterisk.conf \
     && for f in acl aeap ari ccss cdr cel chan_websocket cli_aliases features musiconhold pjproject pjsip_notify pjsip_wizard \
         res_http_media_cache res_stun_monitor stasis udptl voicemail websocket_client; do \
         test -e /etc/asterisk/$f.conf || : > /etc/asterisk/$f.conf; done \
-    && mkdir -p /var/spool/asterisk/outgoing /var/spool/asterisk/token-ring /run/asterisk /var/log/asterisk \
+    && mkdir -p /var/spool/asterisk/outgoing /var/spool/asterisk/token-ring /var/lib/asterisk/db /run/asterisk /var/log/asterisk \
     && chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/spool/asterisk /run/asterisk /var/log/asterisk
 USER asterisk
-# SIP (5060 UDP/TCP) and RTP (10000-10999 UDP, rtp.conf): run with host networking
+# Keep /var/lib/asterisk/db (registrations) on a volume, or phones are forgotten on restart until
+# they register again. SIP (5060 UDP/TCP) and RTP (10000-10999 UDP, rtp.conf): host networking
 CMD ["asterisk", "-f", "-vvv"]

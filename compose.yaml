@@ -26,6 +26,7 @@ services:
     restart: unless-stopped
     volumes:
       - spool:/var/spool/asterisk
+      - astdb:/var/lib/asterisk/db
     secrets:
       - pjsip_auth.conf
 
@@ -97,6 +98,7 @@ services:
 
 volumes:
   spool:
+  astdb:
   hf-cache:
 
 secrets:
