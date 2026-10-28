@@ -91,6 +91,28 @@ def gateway():
 
 
 OUTBOUND = {}  # AudioSocket UUID -> outbound call request from the gateway, until answered
+# AudioSocket UUID of a call ringing [bridge] phone_fallback -> None, or a future told whether a
+# person answered it (not its voicemail)
+FALLBACK = {}
+
+
+async def choose_phone(what):
+    """What to ring: [bridge] phone, or phone_fallback (a mobile through a SIP trunk, say) when it's
+    set and the phone isn't reachable, after REACH_WAIT_S for one that's missed a qualify check
+    (a softphone asleep). Returns (channel, ring_seconds or None, whether it's the fallback)."""
+    c = bridge_conf()
+    tech, _, endpoint = c["phone"].partition("/")
+    if c.get("phone_fallback") and tech.upper() == "PJSIP":
+        try:
+            deadline = time.monotonic() + REACH_WAIT_S
+            while not await reachable(endpoint) and time.monotonic() < deadline:
+                await asyncio.sleep(2)
+            if not await reachable(endpoint):
+                log.info("%s: the phone isn't reachable: ringing the fallback", what)
+                return c["phone_fallback"], c["fallback_ring_seconds"], True
+        except Exception as e:
+            log.warning("%s: couldn't check the phone (%s); ringing it anyway", what, e)
+    return c["phone"], None, False
 
 
 def ring(call, channel, ring_seconds):
@@ -143,30 +165,20 @@ def on_outbound(ev, done):
 
 
 async def place_call(call):
-    """Ring the phone for an outbound call request. With [bridge] phone_fallback set, a phone
-    that isn't reachable (a softphone asleep, say) gets REACH_WAIT_S to come back, then the
-    fallback (a mobile through a SIP trunk) is rung instead."""
-    c = bridge_conf()
-    call_id, channel, seconds = call["call"], c["phone"], c["ring_seconds"]
-    tech, _, endpoint = channel.partition("/")
-    if c.get("phone_fallback") and tech.upper() == "PJSIP":
-        try:
-            deadline = time.monotonic() + REACH_WAIT_S
-            while not await reachable(endpoint) and time.monotonic() < deadline:
-                await asyncio.sleep(2)
-            if not await reachable(endpoint):
-                channel, seconds = c["phone_fallback"], c["fallback_ring_seconds"]
-                call["fallback"] = True
-        except Exception as e:
-            log.warning("outbound %s: couldn't check the phone (%s); ringing it anyway", call_id, e)
+    """Ring the phone for an outbound call request (or the fallback: choose_phone)."""
+    call_id = call["call"]
+    channel, seconds, call["fallback"] = await choose_phone(f"outbound {call_id}")
+    seconds = seconds or bridge_conf()["ring_seconds"]
     try:
         call_uuid = ring(call, channel, seconds)
     except OSError as e:
         log.warning("outbound %s: couldn't write the call file: %s", call_id, e)
         await report(call_id, "failed")
         return
+    if call["fallback"]:
+        FALLBACK[call_uuid] = None
     log.info("outbound %s from %s: ringing %s (%s)", call_id, call["key"],
-             "the fallback (the phone isn't reachable)" if call.get("fallback") else "the phone", call_uuid[:8])
+             "the fallback" if call["fallback"] else "the phone", call_uuid[:8])
     await report(call_id, "ringing")
 
     def unanswered():
@@ -356,14 +368,28 @@ async def text_replies_loop():
 async def ring_app(port, caller_id, ring_seconds=30, call_uuid=None):
     """Ring the phone for a call app ([bridge.apps]): returns the AudioSocket UUID the call will
     arrive on the app's port with if it was answered, or None (no answer, busy, rejected). Waits
-    for the outcome (Asterisk reports it as soon as it's known)."""
-    phone = bridge_conf()["phone"]
+    for the outcome (Asterisk reports it as soon as it's known). If it rang the fallback
+    (choose_phone), its voicemail answering counts as no answer."""
     call_uuid = call_uuid or str(uuid.uuid4())
-    resp = await ami_action({"Action": "Originate", "Channel": phone, "Context": "token-ring-app",
-                             "Exten": "s", "Priority": "1", "Timeout": str(ring_seconds * 1000),
-                             "CallerID": caller_id, "Async": "false",
-                             "Variable": f"TRUUID={call_uuid},TRPORT={port}"}, timeout=ring_seconds + 15)
-    return call_uuid if resp.get("Response") == "Success" else None
+    phone, fallback_seconds, fallback = await choose_phone(f"call app on {port}")
+    if fallback:
+        ring_seconds = min(ring_seconds, fallback_seconds)
+        FALLBACK[call_uuid] = asyncio.get_running_loop().create_future()
+    try:
+        resp = await ami_action({"Action": "Originate", "Channel": phone, "Context": "token-ring-app",
+                                 "Exten": "s", "Priority": "1", "Timeout": str(ring_seconds * 1000),
+                                 "CallerID": caller_id, "Async": "false",
+                                 "Variable": f"TRUUID={call_uuid},TRPORT={port}"}, timeout=ring_seconds + 15)
+        if resp.get("Response") != "Success":
+            return None
+        if fallback:
+            try:
+                return call_uuid if await asyncio.wait_for(FALLBACK[call_uuid], 30) else None
+            except asyncio.TimeoutError:
+                return None
+        return call_uuid
+    finally:
+        FALLBACK.pop(call_uuid, None)
 
 
 async def report(call_id, status):
@@ -387,6 +413,8 @@ class Call:
         self.dictating = False  # recording a voicemail: keep listening while transcribing
         self.saying = ""  # the phrase being spoken, for the trigger-word echo guard
         self.deaf_until = 0.0  # ignore caller audio until then (the rest of a trigger word)
+        self.answering = None   # while listening to how a call we made was answered
+        self.confirming = None  # set by a key press then
         self.last_sound = time.monotonic()
         # Utterance detection state
         self.vad = vad.create()
@@ -561,6 +589,78 @@ class Call:
         """Echo mode: say back what was heard."""
         self.say(f"I heard: {text}" if text else "Sorry, I didn't catch that.", "echo")
 
+    async def start(self):
+        """A call to the fallback (choose_phone) first checks it's a person who answered, not the
+        fallback's voicemail; then on_start."""
+        if self.call_uuid in FALLBACK:
+            person = await self.answered_by_person()
+            result = FALLBACK.get(self.call_uuid)
+            if result is None:
+                FALLBACK.pop(self.call_uuid, None)
+            elif not result.done():
+                result.set_result(person)
+            if not person:
+                await self.on_voicemail()
+                return await self.hangup()
+        await self.on_start()
+
+    @staticmethod
+    def listening():
+        return {"floor": -60.0, "loud": 0, "spoke": False, "last": 0.0, "frames": 0, "first": 0, "last_frame": 0}
+
+    def listen_answer(self, frame):
+        """While waiting for whoever answered a call we made to speak: just listen for sound."""
+        a = self.answering
+        a["frames"] += 1  # time in the call's audio, for telling a hello from a greeting
+        if not self.talking:
+            db = frame_db(frame)
+            if db > a["floor"] + START_DB:
+                a["loud"] += 1
+                if a["loud"] >= START_FRAMES:
+                    if not a["spoke"]:
+                        a["first"] = a["frames"] - START_FRAMES
+                    a["spoke"], a["last"], a["last_frame"] = True, time.monotonic(), a["frames"]
+            else:
+                a["loud"] = 0
+                a["floor"] = 0.95 * a["floor"] + 0.05 * db
+
+    async def answered_by_person(self):
+        """A call to the fallback (a mobile), answered: by a person, or by its voicemail? A person
+        says a short hello and stops; voicemail talks for longer than VOICEMAIL_S. A key press is a
+        person too. Silence gets one "Hello?"; if it's still silent, it's taken as voicemail (when
+        unsure, don't talk to it). Times are in the call's audio (20 ms frames)."""
+        a = self.answering = self.listening()
+        self.confirming = asyncio.Event()
+        person = False
+        try:
+            for attempt in range(2):
+                start = time.monotonic()
+                while True:
+                    if self.confirming.is_set():
+                        person = True
+                        return True
+                    if a["spoke"]:
+                        if (a["last_frame"] - a["first"]) * 0.02 > VOICEMAIL_S:
+                            return False
+                        if a["frames"] - a["last_frame"] >= 50:  # a second's quiet after a hello
+                            person = True
+                            return True
+                    elif time.monotonic() - start > 6:
+                        break
+                    await asyncio.sleep(0.05)
+                if attempt == 0:
+                    self.say("Hello?", "hello")
+                    await self.finish_speaking()
+            return False
+        finally:
+            log.info("%s answered by %s (%.1f s of speech)", self.uuid, "a person" if person else "voicemail or nobody",
+                     max(0, a["last_frame"] - a["first"]) * 0.02 if a["spoke"] else 0)
+            self.answering = self.confirming = None
+            self.noise_db = a["floor"]
+
+    async def on_voicemail(self):
+        """A call to the fallback went to its voicemail (or nobody spoke): about to hang up."""
+
     async def on_start(self):
         self.say(self.greeting, "greeting")
 
@@ -597,13 +697,19 @@ class Call:
                     self.uuid = payload.hex()[:8]
                     log.info("%s call connected (%s)", self.uuid, type(self).__name__)
                     # alongside reading audio: setting up may wait to hear the caller (wait_for_hello)
-                    asyncio.create_task(self.on_start())
+                    asyncio.create_task(self.start())
                 elif kind == KIND_SLIN16:
-                    self.hear(payload)
+                    if self.answering is not None:
+                        self.listen_answer(payload)
+                    else:
+                        self.hear(payload)
                 elif kind == KIND_DTMF:
                     digit = payload.decode(errors="replace")
                     log.info("%s DTMF %s", self.uuid, digit)
-                    asyncio.create_task(self.on_dtmf(digit))  # may call the gateway; keep reading audio
+                    if self.confirming is not None:
+                        self.confirming.set()
+                    else:
+                        asyncio.create_task(self.on_dtmf(digit))  # may call the gateway; keep reading audio
                 elif kind == KIND_HANGUP:
                     break
                 elif kind == KIND_ERROR:
@@ -641,7 +747,6 @@ class Operator(Call):
         self.rereading = 0.0  # when * or 0 last asked for the dialog again
         self.pips = None
         self.spotter = None
-        self.answering = None  # while waiting for whoever answered a call from a session to speak
         self.assistant = bridge_conf()["caller_id"]  # what the AI is called (the gateway says)
 
     @property
@@ -691,21 +796,6 @@ class Operator(Call):
                              "pending": [], "stop": self.stream(key, f"/agents/events?dir={dir_key}")}
 
     def hear(self, frame):
-        a = self.answering
-        if a is not None:  # waiting for whoever answered to speak first: just listen for sound
-            a["frames"] += 1  # time in the call's audio, for telling a hello from a greeting
-            if not self.talking:
-                db = frame_db(frame)
-                if db > a["floor"] + START_DB:
-                    a["loud"] += 1
-                    if a["loud"] >= START_FRAMES:
-                        if not a["spoke"]:
-                            a["first"] = a["frames"] - START_FRAMES
-                        a["spoke"], a["last"], a["last_frame"] = True, time.monotonic(), a["frames"]
-                else:
-                    a["loud"] = 0
-                    a["floor"] = 0.95 * a["floor"] + 0.05 * db
-            return
         if self.spotter:
             self.spotter.feed(frame, frame_db(frame) > self.noise_db + START_DB - 5)
         super().hear(frame)
@@ -740,43 +830,11 @@ class Operator(Call):
             self.answering = None
             self.noise_db = a["floor"]
 
-    @staticmethod
-    def listening():
-        return {"floor": -60.0, "loud": 0, "spoke": False, "last": 0.0, "frames": 0, "first": 0, "last_frame": 0}
-
-    async def answered_by_person(self):
-        """A call to the fallback (a mobile), answered: by a person, or by its voicemail? A person
-        says a short hello and stops; voicemail talks for longer than VOICEMAIL_S. A key press is a
-        person too. Silence gets one "Hello?"; if it's still silent, it's taken as voicemail (when
-        unsure, don't talk to it). Times are in the call's audio (20 ms frames)."""
-        a = self.answering = self.listening()
-        self.confirming = asyncio.Event()
-        person = False
-        try:
-            for attempt in range(2):
-                start = time.monotonic()
-                while True:
-                    if self.confirming.is_set():
-                        person = True
-                        return True
-                    if a["spoke"]:
-                        if (a["last_frame"] - a["first"]) * 0.02 > VOICEMAIL_S:
-                            return False
-                        if a["frames"] - a["last_frame"] >= 50:  # a second's quiet after a hello
-                            person = True
-                            return True
-                    elif time.monotonic() - start > 6:
-                        break
-                    await asyncio.sleep(0.05)
-                if attempt == 0:
-                    self.say("Hello?", "hello")
-                    await self.finish_speaking()
-            return False
-        finally:
-            log.info("%s answered by %s (%.1f s of speech)", self.uuid, "a person" if person else "voicemail or nobody",
-                     max(0, a["last_frame"] - a["first"]) * 0.02 if a["spoke"] else 0)
-            self.answering = self.confirming = None
-            self.noise_db = a["floor"]
+    async def on_voicemail(self):
+        call = OUTBOUND.pop(getattr(self, "call_uuid", ""), None)
+        if call:
+            log.info("%s outbound %s: voicemail or nobody", self.uuid, call["call"])
+            asyncio.create_task(report(call["call"], "no answer"))
 
     def on_keyword(self, action, phrase):
         """A trigger word. Only acted on while speaking (barge-in); otherwise speech-to-text hears
@@ -800,11 +858,7 @@ class Operator(Call):
             self.assistant = info["assistant"]
         if call:  # a session rang the phone: say why, then talk to that session
             log.info("%s outbound %s answered", self.uuid, call["call"])
-            if call.get("fallback"):  # a mobile: don't talk to its voicemail
-                if not await self.answered_by_person():
-                    asyncio.create_task(report(call["call"], "no answer"))
-                    await self.hangup()
-                    return
+            if call.get("fallback"):  # a person's already said hello (start)
                 asyncio.create_task(report(call["call"], "answered"))
             else:
                 asyncio.create_task(report(call["call"], "answered"))
@@ -1030,9 +1084,6 @@ class Operator(Call):
             self.say(f"Sorry, that didn't work: {body.get('error', 'no answer from the session')}.", "dialog")
 
     async def on_dtmf(self, digit):
-        if getattr(self, "confirming", None):  # answering a call to the fallback: it's a person
-            self.confirming.set()
-            return
         log.info("%s key %s: dialog %s, menu %s, queued %d", self.uuid, digit,
                  self.dialog and self.dialog["kind"], bool(self.menu), self.queue.qsize())
         await self.play(TICK)

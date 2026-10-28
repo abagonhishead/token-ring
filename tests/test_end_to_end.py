@@ -231,6 +231,8 @@ class FakeAMI:
         self.froms = []
         self.listeners = []
         self.mwi = []
+        self.originated = []
+        self.answer = None  # async (Originate message): whoever answers an Originate
 
     async def handle(self, reader, writer):
         writer.write(b"Asterisk Call Manager/9.0.0\r\n")
@@ -251,6 +253,10 @@ class FakeAMI:
                     self.sent.append(base64.b64decode(msg["Base64Body"]).decode())
                     self.froms.append(msg.get("From"))
                     writer.write(b"Response: Success\r\nMessage: Message successfully sent\r\n\r\n")
+                elif action == "Originate":  # answered at once; the test plays whoever answered
+                    self.originated.append(msg)
+                    asyncio.create_task(self.answer(msg))
+                    writer.write(b"Response: Success\r\nMessage: Originate successfully queued\r\n\r\n")
                 elif action == "MWIUpdate":
                     self.mwi.append((msg["Mailbox"], int(msg["NewMessages"]), int(msg["OldMessages"])))
                     writer.write(b"Response: Success\r\nMessage: Mailbox updated\r\n\r\n")
@@ -385,4 +391,34 @@ def test_outbound_fallback(system, conf, tmp_path, monkeypatch):
             await until(said_has(said, "All done."))
         assert gw(ports, "GET", f"/calls/{call_id}")["status"] == "answered"
         task.cancel()
+    asyncio.run(main())
+
+
+def test_call_app_fallback(system, conf, tmp_path, monkeypatch):
+    """A call app's call (ring_app) goes to the fallback too, and its voicemail is no answer."""
+    ports, said, tmp = system
+    monkeypatch.setattr(bridge, "REACH_WAIT_S", 0.5)
+    text = (tmp_path / "config.toml").read_text().replace(
+        "[bridge]\n", '[bridge]\nphone_fallback = "PJSIP/07700900123@trunk"\n')
+    conf(text)
+    ami = FakeAMI()
+
+    def answered_with(pcm):
+        async def answer(msg):
+            call_uuid = dict(v.split("=", 1) for v in msg["Variable"].split(","))["TRUUID"]
+            async with Caller(ports["echo"], call_uuid) as c:
+                await c.audio(pcm)
+                await asyncio.sleep(2)
+        return answer
+
+    async def main():
+        await serve(ports)
+        await asyncio.start_server(ami.handle, "127.0.0.1", ports["ami"])
+        ami.answer = answered_with(b"\0" * 8000 + tone(300, 5000, level=0.3) + b"\0" * 32000)
+        assert await bridge.ring_app(ports["echo"], '"Test" <700>', 45) is None
+        assert ami.originated[-1]["Channel"] == "PJSIP/07700900123@trunk"
+        assert ami.originated[-1]["Timeout"] == "20000"
+        ami.answer = answered_with(b"\0" * 8000 + tone(300, 800, level=0.3) + b"\0" * 32000)
+        assert await bridge.ring_app(ports["echo"], '"Test" <700>', 45)
+        assert not bridge.FALLBACK
     asyncio.run(main())
