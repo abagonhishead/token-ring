@@ -25,7 +25,7 @@ staging = "/var/spool/asterisk/token-ring"  # must be on the same filesystem as 
 ring_seconds = 30
 phone_fallback = ""            # rung instead when the phone isn't reachable (a softphone asleep):
                                # e.g. a mobile through a SIP trunk, "PJSIP/07700900123@trunk".
-                               # Whoever answers presses a key first, so its voicemail can't
+                               # A short hello gets the call; its voicemail is hung up on
 fallback_ring_seconds = 20     # less than the mobile takes to divert to its voicemail
 gateway_url = "http://127.0.0.1:9096"
 gateway_token_file = "/run/secrets/token"   # or gateway_token = "...", or $TOKEN_RING_TOKEN

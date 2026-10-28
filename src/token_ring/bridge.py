@@ -51,6 +51,7 @@ PREROLL_MS = 300
 MIN_SPEECH_MS = 300
 MAX_UTTERANCE_S = 20
 REACH_WAIT_S = 15    # texts: how long to wait for a phone that's missed a qualify check
+VOICEMAIL_S = 3.5    # calls to the fallback: talking longer than this when answering is voicemail
 
 log = logging.getLogger("token-ring")
 
@@ -692,12 +693,15 @@ class Operator(Call):
     def hear(self, frame):
         a = self.answering
         if a is not None:  # waiting for whoever answered to speak first: just listen for sound
+            a["frames"] += 1  # time in the call's audio, for telling a hello from a greeting
             if not self.talking:
                 db = frame_db(frame)
                 if db > a["floor"] + START_DB:
                     a["loud"] += 1
                     if a["loud"] >= START_FRAMES:
-                        a["spoke"], a["last"] = True, time.monotonic()
+                        if not a["spoke"]:
+                            a["first"] = a["frames"] - START_FRAMES
+                        a["spoke"], a["last"], a["last_frame"] = True, time.monotonic(), a["frames"]
                 else:
                     a["loud"] = 0
                     a["floor"] = 0.95 * a["floor"] + 0.05 * db
@@ -710,7 +714,7 @@ class Operator(Call):
         """After a call from a session is answered: wait for whoever picked up to say something, then
         for a second's quiet, before talking. If nobody speaks within answer_wait_seconds, ask if anyone
         is there, wait once more, then carry on anyway. What they say isn't sent anywhere."""
-        a = self.answering = {"floor": -60.0, "loud": 0, "spoke": False, "last": 0.0}
+        a = self.answering = self.listening()
         t0 = time.monotonic()
         wait = bridge_conf()["answer_wait_seconds"]
         try:
@@ -736,23 +740,43 @@ class Operator(Call):
             self.answering = None
             self.noise_db = a["floor"]
 
-    async def confirm_answer(self):
-        """A call to the fallback (a mobile): its voicemail mustn't take the call, so whoever
-        answers presses a key first. Asked twice; False if nobody does."""
+    @staticmethod
+    def listening():
+        return {"floor": -60.0, "loud": 0, "spoke": False, "last": 0.0, "frames": 0, "first": 0, "last_frame": 0}
+
+    async def answered_by_person(self):
+        """A call to the fallback (a mobile), answered: by a person, or by its voicemail? A person
+        says a short hello and stops; voicemail talks for longer than VOICEMAIL_S. A key press is a
+        person too. Silence gets one "Hello?"; if it's still silent, it's taken as voicemail (when
+        unsure, don't talk to it). Times are in the call's audio (20 ms frames)."""
+        a = self.answering = self.listening()
         self.confirming = asyncio.Event()
+        person = False
         try:
-            for _ in range(2):
-                self.say(f"Hello, it's {self.assistant}. Press any key to talk, or hang up and call "
-                         "back.", "confirm")
-                await self.finish_speaking()
-                try:
-                    await asyncio.wait_for(self.confirming.wait(), 8)
-                    return True
-                except asyncio.TimeoutError:
-                    pass
+            for attempt in range(2):
+                start = time.monotonic()
+                while True:
+                    if self.confirming.is_set():
+                        person = True
+                        return True
+                    if a["spoke"]:
+                        if (a["last_frame"] - a["first"]) * 0.02 > VOICEMAIL_S:
+                            return False
+                        if a["frames"] - a["last_frame"] >= 50:  # a second's quiet after a hello
+                            person = True
+                            return True
+                    elif time.monotonic() - start > 6:
+                        break
+                    await asyncio.sleep(0.05)
+                if attempt == 0:
+                    self.say("Hello?", "hello")
+                    await self.finish_speaking()
             return False
         finally:
-            self.confirming = None
+            log.info("%s answered by %s (%.1f s of speech)", self.uuid, "a person" if person else "voicemail or nobody",
+                     max(0, a["last_frame"] - a["first"]) * 0.02 if a["spoke"] else 0)
+            self.answering = self.confirming = None
+            self.noise_db = a["floor"]
 
     def on_keyword(self, action, phrase):
         """A trigger word. Only acted on while speaking (barge-in); otherwise speech-to-text hears
@@ -776,9 +800,8 @@ class Operator(Call):
             self.assistant = info["assistant"]
         if call:  # a session rang the phone: say why, then talk to that session
             log.info("%s outbound %s answered", self.uuid, call["call"])
-            if call.get("fallback"):
-                if not await self.confirm_answer():
-                    log.info("%s outbound %s: no key pressed (voicemail?)", self.uuid, call["call"])
+            if call.get("fallback"):  # a mobile: don't talk to its voicemail
+                if not await self.answered_by_person():
                     asyncio.create_task(report(call["call"], "no answer"))
                     await self.hangup()
                     return
@@ -1007,9 +1030,8 @@ class Operator(Call):
             self.say(f"Sorry, that didn't work: {body.get('error', 'no answer from the session')}.", "dialog")
 
     async def on_dtmf(self, digit):
-        if getattr(self, "confirming", None):  # answering a call to the fallback
+        if getattr(self, "confirming", None):  # answering a call to the fallback: it's a person
             self.confirming.set()
-            self.hush()
             return
         log.info("%s key %s: dialog %s, menu %s, queued %d", self.uuid, digit,
                  self.dialog and self.dialog["kind"], bool(self.menu), self.queue.qsize())

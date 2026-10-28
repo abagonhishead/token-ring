@@ -348,7 +348,8 @@ def test_voicemail_light(system, conf, tmp_path, monkeypatch):
 
 
 def test_outbound_fallback(system, conf, tmp_path, monkeypatch):
-    """The phone isn't reachable: the fallback is rung, and talks once a key's pressed."""
+    """The phone isn't reachable: the fallback is rung. A short hello gets the call; a long
+    greeting is voicemail, and gets hung up on."""
     ports, said, tmp = system
     monkeypatch.setattr(bridge, "REACH_WAIT_S", 0.5)
     text = (tmp_path / "config.toml").read_text().replace(
@@ -356,22 +357,32 @@ def test_outbound_fallback(system, conf, tmp_path, monkeypatch):
     conf(text)
     ami = FakeAMI()
 
+    async def ring(key):
+        for f in os.listdir(tmp / "spool"):
+            os.remove(tmp / "spool" / f)
+        call = gw(ports, "POST", "/calls", {"key": key, "message": "All done."})
+        await until(lambda: os.listdir(tmp / "spool"), timeout=5)
+        body = (tmp / "spool" / os.listdir(tmp / "spool")[0]).read_text()
+        assert "Channel: PJSIP/07700900123@trunk" in body and "WaitTime: 20" in body
+        return call["id"], body.split("TRUUID=")[1].strip()
+
     async def main():
         await serve(ports)
         await asyncio.start_server(ami.handle, "127.0.0.1", ports["ami"])
         task = asyncio.create_task(bridge.outbound_loop())
         await until(lambda: gateway.G.outbound, timeout=5)
-        call = gw(ports, "POST", "/calls", {"key": "alpha", "message": "All done."})
-        await until(lambda: os.listdir(tmp / "spool"), timeout=5)
-        body = (tmp / "spool" / os.listdir(tmp / "spool")[0]).read_text()
-        assert "Channel: PJSIP/07700900123@trunk" in body and "WaitTime: 20" in body
-        call_uuid = body.split("TRUUID=")[1].strip()
+
+        call_id, call_uuid = await ring("alpha")
         async with Caller(ports["op"], call_uuid) as c:
-            await until(said_has(said, "Press any key to talk"))
-            assert gw(ports, "GET", f"/calls/{call['id']}")["status"] == "ringing"
-            await c.key("5")
+            await c.audio(b"\0" * 8000 + tone(300, 5000, level=0.3) + b"\0" * 32000)  # a greeting
+            await until(lambda: gw(ports, "GET", f"/calls/{call_id}")["status"] == "no answer")
+        assert not said_has(said, "All done.")()
+
+        call_id, call_uuid = await ring("beta")
+        async with Caller(ports["op"], call_uuid) as c:
+            await c.speak()  # "hello?"
             await until(said_has(said, "this is a call from Echo on"))
             await until(said_has(said, "All done."))
-        assert gw(ports, "GET", f"/calls/{call['id']}")["status"] == "answered"
+        assert gw(ports, "GET", f"/calls/{call_id}")["status"] == "answered"
         task.cancel()
     asyncio.run(main())

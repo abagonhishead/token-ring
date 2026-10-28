@@ -63,8 +63,9 @@ reminder every hour while it's unheard. Text 200 from the phone's
 chat and the operator answers by text: ask it to have a session ring you back. When you answer, you hear the message and you're talking to the session that rang.
 A softphone that's asleep (Android without push) can miss calls: with `[bridge] phone_fallback`,
 a phone that isn't reachable gets 15 seconds to come back, then your mobile is rung instead
-through a SIP trunk. Press any key to talk (so its voicemail can't take the call), or let it
-ring and call back from the softphone.
+through a SIP trunk. Answer with a short hello (or press a key) and you're through; a long
+greeting is taken for its voicemail and hung up on, and the session can leave you voicemail
+instead. Or let it ring and call back from the softphone.
 `docs/agents.md` is what to tell your agents about it.
 
 ## Quick start (containers)
