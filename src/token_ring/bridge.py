@@ -125,7 +125,7 @@ def ring(call, channel, ring_seconds):
     who = re.sub(r"[^A-Za-z0-9 ._-]", "", call.get("assistant") or c["caller_id"])[:20]
     body = (f"Channel: {channel}\nCallerID: \"{who}: {label}\" <600>\nWaitTime: {ring_seconds}\n"
             f"MaxRetries: 0\nContext: token-ring-callback\nExtension: s\nPriority: 1\n"
-            f"Setvar: TRUUID={call_uuid}\n")
+            f"Setvar: TRUUID={call_uuid}\nSetvar: CDR(to)={channel}\n")   # who was rung, for the call log
     os.makedirs(c["staging"], exist_ok=True)
     tmp = os.path.join(c["staging"], f"{call_uuid}.call")
     with open(tmp, "w") as f:
@@ -379,7 +379,8 @@ async def ring_app(port, caller_id, ring_seconds=30, call_uuid=None):
         resp = await ami_action({"Action": "Originate", "Channel": phone, "Context": "token-ring-app",
                                  "Exten": "s", "Priority": "1", "Timeout": str(ring_seconds * 1000),
                                  "CallerID": caller_id, "Async": "false",
-                                 "Variable": f"TRUUID={call_uuid},TRPORT={port}"}, timeout=ring_seconds + 15)
+                                 "Variable": f"TRUUID={call_uuid},TRPORT={port},CDR(to)={phone}"},
+                                timeout=ring_seconds + 15)
         if resp.get("Response") != "Success":
             return None
         if fallback:

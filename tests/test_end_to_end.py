@@ -211,7 +211,7 @@ def test_voicemail_and_outbound(system):
         await until(lambda: os.listdir(tmp / "spool"))
         body = (tmp / "spool" / os.listdir(tmp / "spool")[0]).read_text()
         assert "Context: token-ring-callback" in body and '"Echo: alpha"' in body
-        call_uuid = body.split("TRUUID=")[1].strip()
+        call_uuid = body.split("TRUUID=")[1].split()[0]
         async with Caller(ports["op"], call_uuid) as c:
             await c.speak()  # "hello?"
             await until(said_has(said, "this is a call from Echo on"))
@@ -370,7 +370,7 @@ def test_outbound_fallback(system, conf, tmp_path, monkeypatch):
         await until(lambda: os.listdir(tmp / "spool"), timeout=5)
         body = (tmp / "spool" / os.listdir(tmp / "spool")[0]).read_text()
         assert "Channel: PJSIP/07700900123@trunk" in body and "WaitTime: 20" in body
-        return call["id"], body.split("TRUUID=")[1].strip()
+        return call["id"], body.split("TRUUID=")[1].split()[0]
 
     async def main():
         await serve(ports)

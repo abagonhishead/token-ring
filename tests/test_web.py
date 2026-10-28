@@ -196,3 +196,35 @@ def test_status_splits_trunks_from_phones(conf):
     assert (t["number"], t["server"], t["registration"], t["status"], t["rtt_ms"], t["match"], t["context"]) == \
         ("+441632960000", "sip.example.net", "Registered", "Reachable", 21, "192.0.2.1", "from-trunk")
     assert "secret" not in json.dumps(st)
+
+
+def test_call_log(site, monkeypatch, tmp_path):
+    base, etc, cfg, reloads = site
+    log_file = tmp_path / "calls.csv"
+    cfg.write_text(cfg.read_text().replace("[web]\n", f'[web]\ncalls_log = "{log_file}"\ncalls_keep_days = 90\n'))
+    config._cache.update(path=None, mtime=None, config=None)
+
+    async def uk():
+        return "44"
+    monkeypatch.setattr(web, "country_code", uk)
+    (etc / "callers.conf").write_text("[allowed-callers]\nexten => 07700900123,1,NoOp() ; Someone\n")
+    now = 1_800_000_000
+    def row(start, *rest):
+        return ",".join('"' + str(x).replace('"', '""') + '"' for x in (start, *rest)) + "\n"   # as CSV_QUOTE does
+    log_file.write_text(
+        row(now - 100 * 86400, 0, now - 100 * 86400 + 5, 5, 0, "NO ANSWER", "07700900999", '"" <07700900999>', "aa-in",
+            "from-trunk", "PJSIP/trunk-00000001", "", "Hangup", "1.1", "", "rejected")
+        + row(now - 60, now - 58, now - 30, 30, 28, "ANSWERED", "+447700900123", '"Mobile" <+447700900123>', "aa-in",
+              "from-trunk", "PJSIP/trunk-00000002", "", "Playback", "1.2", "", "allowed")
+        + row(now - 10, now - 5, now, 10, 5, "ANSWERED", "600", '"Claude: app" <600>', "s", "token-ring-callback",
+              "PJSIP/trunk-00000003", "", "Dial", "1.3", "PJSIP/07700900123@trunk", ""))
+    calls = web.read_calls()
+    assert [c["uniqueid"] for c in calls] == ["1.3", "1.2", "1.1"]          # newest first
+    assert calls[1]["name"] == "Someone" and calls[1]["caller_name"] == "Mobile" and calls[1]["screen"] == "allowed"
+    assert calls[0]["to_number"] == "07700900123" and calls[0]["to_name"] == "Someone"
+    assert calls[2]["name"] == "" and calls[2]["answer"] is None
+    code, r = call(base, "GET", "/api/calls")
+    assert code == 200 and len(r["calls"]) == 3
+    assert web.prune_calls(now=now) == 1                                    # the 100-day-old one goes
+    assert [c["uniqueid"] for c in web.read_calls()] == ["1.3", "1.2"]
+    assert web.prune_calls(now=now) == 0

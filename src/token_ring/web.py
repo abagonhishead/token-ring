@@ -17,6 +17,7 @@ Asterisk's callers.conf.
 There's no login yet: keep it to your LAN or VPN.
 """
 import asyncio
+import csv
 import json
 import logging
 import os
@@ -40,6 +41,8 @@ RELOADS = {
     "pjsip.conf": "module reload res_pjsip.so",
     "extensions.conf": "dialplan reload",
     "callers.conf": "dialplan reload",
+    "cdr.conf": "module reload cdr",
+    "cdr_custom.conf": "module reload cdr_custom.so",
     "manager.conf": "manager reload",
     "logger.conf": "logger reload",
     "rtp.conf": "module reload res_rtp_asterisk.so",
@@ -325,7 +328,8 @@ def follow_file(path, start, emit, stop):
 
 
 def rotate_loop():
-    """Keep Asterisk's full.log small: rotate it past [web] rotate_mb, keep three old ones."""
+    """Keep Asterisk's full.log small: rotate it past [web] rotate_mb, keep three old ones. And
+    keep the call log to [web] calls_keep_days."""
     while True:
         try:
             path = config.expand(web_conf()["asterisk_log"])
@@ -338,6 +342,10 @@ def rotate_loop():
                     os.remove(os.path.join(os.path.dirname(path), old))
         except Exception as e:
             log.debug("rotate: %s", e)
+        try:
+            prune_calls()
+        except Exception as e:
+            log.warning("call log: %s", e)
         time.sleep(60)
 
 
@@ -480,6 +488,89 @@ def write_callers(callers, country):
     return save_config("asterisk", CALLERS_FILE, text)
 
 
+# The call log: Asterisk's call records (cdr_custom.conf writes calls.csv, a line per call), newest
+# first, with names from the allowed callers. Which calls are in, out or internal is worked out
+# on the page, which knows the trunks.
+
+CALL_FIELDS = ["start", "answer", "end", "duration", "billsec", "disposition", "src", "clid", "dst",
+               "dcontext", "channel", "dstchannel", "lastapp", "uniqueid", "to", "screen"]
+
+
+def read_calls(limit=100):
+    path = config.expand(web_conf()["calls_log"])
+    try:
+        with open(path, "rb") as f:
+            start = max(0, os.path.getsize(path) - 400 * (limit + 1))   # about enough lines, from the end
+            f.seek(start)
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return []
+    lines = text.splitlines()[1 if start else 0:][-limit:]     # (from the middle: not the part-line)
+    country = None
+    names = {}
+    calls = []
+    for row in csv.reader(lines):
+        if len(row) < len(CALL_FIELDS):
+            continue
+        c = dict(zip(CALL_FIELDS, row))
+        for k in ("start", "answer", "end"):
+            c[k] = float(c[k] or 0) or None
+        for k in ("duration", "billsec"):
+            c[k] = int(c[k] or 0)
+        m = re.match(r'"?(.*?)"?\s*<[^>]*>$', c["clid"])
+        c["caller_name"] = m.group(1) if m else ""
+        # who's who: the caller, and for calls the PBX placed through a trunk, who it rang
+        if country is None:
+            country = ami(country_code())
+            names = {x["number"]: x["name"] for x in read_callers()["callers"]}
+        c["name"] = lookup_name(c["src"], country, names)
+        rung = re.match(r"PJSIP/([^@]+)@", c["to"])
+        c["to_number"] = rung.group(1) if rung else ""
+        c["to_name"] = lookup_name(c["to_number"], country, names)
+        calls.append(c)
+    return calls[::-1]
+
+
+def prune_calls(now=None):
+    """Drop call records older than [web] calls_keep_days (0: keep them all). Returns how many."""
+    days = web_conf()["calls_keep_days"]
+    path = config.expand(web_conf()["calls_log"])
+    if not days or not os.path.exists(path):
+        return 0
+    cutoff = (now or time.time()) - days * 86400
+
+    def start_of(line):
+        try:
+            return float(next(csv.reader([line]))[0] or 0)
+        except (ValueError, IndexError, StopIteration):
+            return cutoff   # not a record: keep it
+    with open(path, encoding="utf-8", errors="replace") as f:
+        if start_of(f.readline()) >= cutoff:
+            return 0        # the oldest is recent enough: nothing to do
+    for _ in range(3):      # Asterisk appends a line per call: start again if one lands meanwhile
+        size = os.path.getsize(path)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        keep = [l for l in lines if start_of(l) >= cutoff]
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(keep)
+        os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        if os.path.getsize(path) == size:
+            os.replace(tmp, path)
+            log.info("call log: dropped %d records older than %d days", len(lines) - len(keep), days)
+            return len(lines) - len(keep)
+    os.remove(tmp)
+    return 0
+
+
+def lookup_name(number, country, names):
+    try:
+        return names.get(normalise_number(number, country), "") if number else ""
+    except ValueError:
+        return ""
+
+
 def reload_asterisk(name):
     """Reload what a file belongs to; returns what Asterisk said, and the warnings it logged."""
     command = RELOADS.get(name, "core reload")
@@ -553,6 +644,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.logs(q.get("source", "asterisk"), int(q.get("lines", 300)), q.get("follow") == "1")
             if path == "/api/config":
                 return self.reply(200, {"files": list_config()})
+            if path == "/api/calls":
+                return self.reply(200, {"calls": read_calls(min(int(q.get("limit", 100)), 1000))})
             if path == "/api/callers":
                 return self.reply(200, {**read_callers(), "country_code": ami(country_code())})
             m = re.fullmatch(r"/api/config/(asterisk|token-ring)/([\w.-]+)", path)

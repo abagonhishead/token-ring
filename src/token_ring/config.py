@@ -77,6 +77,8 @@ DEFAULTS = {
         "ami_user": "token-ring-web",        # its own manager login (in [bridge] ami_secret_file)
         "asterisk_dir": "/etc/asterisk",
         "asterisk_log": "/var/log/asterisk/full.log",
+        "calls_log": "/var/log/asterisk/cdr-custom/calls.csv",   # cdr_custom.conf: the call log
+        "calls_keep_days": 90,                    # older call records are dropped (0: keep all)
         "bridge_log": "/var/log/token-ring/bridge.log",
         "rotate_mb": 5,
     },

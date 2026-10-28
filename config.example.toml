@@ -145,6 +145,7 @@ port = 8443
 cert_file = "/tls/fullchain.pem"           # HTTPS when both exist
 key_file = "/tls/privkey.pem"
 ami_user = "token-ring-web"                # its manager login, a section in ami_secret_file
+calls_keep_days = 90                        # the call log (Asterisk's cdr_custom.conf) keeps this long
 
 # Speech detection: which of the caller's sound is speech (see src/token_ring/vad.py)
 [vad]

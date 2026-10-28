@@ -138,6 +138,9 @@ button.btn:disabled { opacity: .5; cursor: default; }
 </header>
 <main>
   <section id="overview">
+    <div class="card" id="calls-card"><h2>Recent calls<span class="spacer"></span><span class="muted" id="calls-note" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+      <div class="body" style="overflow-x:auto"><table id="calllog"></table>
+        <button class="btn" id="calls-more" style="margin-top:8px" hidden>Show more</button></div></div>
     <div class="card"><h2>Connections</h2><div class="body diagram-wrap"><svg class="diagram" id="diagram"></svg></div></div>
     <div class="grid">
       <div class="card"><h2>Devices</h2><div class="body"><table id="devices"></table></div></div>
@@ -383,12 +386,65 @@ async function refresh() {
     const bad = st.errors.length || !st.services.gateway.up || st.services.bridge.some(p => !p.up);
     $("#hdot").className = "dot " + (bad ? "warn" : "ok");
     $("#hsub").textContent = `${st.host} · Asterisk ${st.asterisk.version || "?"} · ${st.contacts.filter(c => !(st.trunks || []).some(t => t.name === c.endpoint)).length} device(s) registered${(st.trunks || []).map(t => ` · ${t.name} ${(t.registration || t.status || "?").toLowerCase()}`).join("")}`;
-    if (tab === "overview") { renderDiagram(st); renderTables(st); renderCallers(); }
+    if (tab === "overview") { renderDiagram(st); renderTables(st); renderCallers(); loadCalls(); }
   } catch (e) {
     $("#hdot").className = "dot bad";
     $("#hsub").textContent = "can't reach the PBX: " + e.message;
   }
 }
+
+// The call log (Asterisk's call records): in and out on the trunks, calls between phones and to
+// the AI, and the calls the PBX places
+let calls = [], callsShown = 15;
+async function loadCalls() {
+  try { calls = (await api("/api/calls?limit=300")).calls; } catch (e) { $("#calls-note").textContent = e.message; return; }
+  renderCalls();
+}
+const endpointOf = ch => (/^PJSIP\/(.+)-[0-9a-f]{8}$/.exec(ch || "") || [])[1] || "";
+function describeCall(c, st) {
+  const trunks = Object.fromEntries((st.trunks || []).map(t => [t.name, t]));
+  const phones = Object.fromEntries(st.endpoints.map(e => [e.name, (e.callerid.match(/"([^"]*)"/) || [])[1] || ""]));
+  const exts = Object.fromEntries(((st.dialplan.find(d => d.context === "internal") || {}).extensions || [])
+    .map(e => [e.exten, extInfo(e, st.services.bridge).label]));
+  const phone = ext => ({main: phones[ext] ? `${ext} ${phones[ext]}` : ext});
+  const person = (name, number, cid) => ({main: name || cid || number || "unknown",
+    sub: [name || cid ? number : "", name && cid && cid !== name ? `caller ID: ${cid}` : "", !name && cid ? "name from caller ID" : ""]
+      .filter(Boolean).join(" · ")});
+  const ep = endpointOf(c.channel), placed = c.to || ["token-ring-callback", "token-ring-app"].includes(c.dcontext);
+  if (placed) {
+    const via = (/@(.+)$/.exec(c.to || "") || [])[1];
+    const from = {main: c.caller_name || c.src, sub: "the PBX"};
+    if (via && trunks[via]) return {kind: "out", from, to: person(c.to_name, c.to_number, ""), via: trunks[via].number};
+    return {kind: "pbx", from, to: phone(endpointOf(c.to ? c.to + "-00000000" : c.channel) || ep)};
+  }
+  if (trunks[ep]) return {kind: "in", from: person(c.name, c.src, c.caller_name), to: {main: trunks[ep].number, sub: ep}};
+  const dep = endpointOf(c.dstchannel);
+  if (trunks[dep]) return {kind: "out", from: phone(ep), to: person("", c.dst, ""), via: trunks[dep].number};
+  return {kind: "internal", from: phone(ep || c.src), to: {main: c.dst, sub: exts[c.dst] || phones[c.dst] || ""}};
+}
+function renderCalls() {
+  if (!status) return;
+  const rows = calls.filter(c => !/^Local\//.test(c.channel));
+  const KIND = {in: ["In", "ok"], out: ["Out", ""], pbx: ["From PBX", ""], internal: ["Internal", ""]};
+  const RESULT = {"ANSWERED": ["Answered", "ok"], "NO ANSWER": ["No answer", "warn"], "BUSY": ["Busy", "warn"],
+                  "FAILED": ["Failed", "bad"], "CONGESTION": ["Failed", "bad"]};
+  const when = t => { const d = new Date(t * 1000), today = new Date().toDateString() === d.toDateString();
+    return (today ? "" : d.toLocaleDateString(undefined, {day: "numeric", month: "short"}) + " ") + d.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"}); };
+  const len = s => s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "";
+  const cell = x => `<div>${esc(x.main)}</div>${x.sub ? `<div class="muted">${esc(x.sub)}</div>` : ""}`;
+  $("#calls-note").textContent = rows.length ? `${rows.length} call(s) in the log` : "";
+  $("#calllog").innerHTML = rows.length ? "<tr><th>When</th><th></th><th>From</th><th>To</th><th>Result</th><th>Length</th></tr>" +
+    rows.slice(0, callsShown).map(c => {
+      const d = describeCall(c, status), [k, kc] = KIND[d.kind];
+      const [r, rc] = c.screen === "rejected" ? ["Rejected: not an allowed caller", "bad"] : RESULT[c.disposition] || [c.disposition.toLowerCase(), ""];
+      return `<tr><td style="white-space:nowrap">${esc(when(c.start))}</td><td><span class="tag ${kc}">${k}</span></td>
+        <td>${cell(d.from)}</td><td>${cell(d.to)}${d.via ? `<div class="muted">via ${esc(d.via)}</div>` : ""}</td>
+        <td><span class="tag ${rc}">${esc(r)}</span></td><td class="mono">${len(c.billsec)}</td></tr>`;
+    }).join("")
+    : '<tr><td class="muted">No calls yet. Calls are recorded from when call records were switched on (cdr_custom.conf).</td></tr>';
+  $("#calls-more").hidden = rows.length <= callsShown;
+}
+$("#calls-more").onclick = () => { callsShown += 30; renderCalls(); };
 
 // Allowed callers (callers.conf): listed here, changed with Advanced on
 let callers = null;

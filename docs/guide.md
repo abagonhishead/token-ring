@@ -148,6 +148,10 @@ Secrets (the gateway token, SIP passwords) stay outside the images, as compose s
 `docker compose up -d` also starts a web page for the PBX, on port 8443 (HTTPS with the
 certificate in `./tls`, otherwise plain HTTP):
 
+- **Recent calls:** in and out on the trunks, calls between phones and to the AI, and the calls
+  the PBX places, with the caller's name when they're an allowed caller and whether they were let
+  in. It's Asterisk's call records (`cdr.conf`, `cdr_custom.conf`, written to
+  `/var/log/asterisk/cdr-custom/calls.csv`), kept for `[web] calls_keep_days` (90 by default).
 - **Overview:** a diagram of the registered phones, Asterisk, the extensions and the services,
   with each phone's app, address, encryption and voicemail-light subscription, calls in progress
   and the voicemail counts.
