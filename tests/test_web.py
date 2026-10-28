@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -139,3 +140,38 @@ def test_gateway_log_buffer():
     lg.warning("line 5")
     lines, count = buf.since(5)
     assert count == 6 and lines[0].endswith("line 5")
+
+
+def test_status_splits_trunks_from_phones(conf):
+    """A trunk (outbound registration, identify by address) is listed apart from the phones."""
+    conf("")
+
+    class Conn:
+        async def list(self, f):
+            a = f["Action"]
+            if a == "PJSIPShowEndpoints":
+                return [{"ObjectName": "100", "DeviceState": "Not in use"}, {"ObjectName": "trunk", "DeviceState": "Not in use"}]
+            if a == "PJSIPShowEndpoint" and f["Endpoint"] == "100":
+                return [{"Event": "EndpointDetail", "Callerid": '"Phone" <100>', "Context": "internal"},
+                        {"Event": "AuthDetail", "Password": "secret100"}]
+            if a == "PJSIPShowEndpoint":
+                return [{"Event": "EndpointDetail", "Context": "from-trunk", "Allow": "(alaw)"},
+                        {"Event": "AuthDetail", "Password": "secrettrunk"},
+                        {"Event": "ContactStatusDetail", "Status": "Reachable", "RoundtripUsec": "21000"},
+                        {"Event": "IdentifyDetail", "Match": "192.0.2.1/255.255.255.255"}]
+            if a == "PJSIPShowRegistrationsOutbound":
+                return [{"Event": "OutboundRegistrationDetail", "ObjectName": "trunk",
+                         "ClientUri": "sip:+441632960000@sip.example.net", "ServerUri": "sip:sip.example.net",
+                         "Status": "Registered"},
+                        {"Event": "AuthDetail", "ObjectName": "trunk", "Password": "secretreg"}]
+            return []
+
+        async def action(self, f):
+            return {"Response": "Success"}
+
+    st = asyncio.run(web.gather_status(Conn()))
+    assert [e["name"] for e in st["endpoints"]] == ["100"]
+    t, = st["trunks"]
+    assert (t["number"], t["server"], t["registration"], t["status"], t["rtt_ms"], t["match"], t["context"]) == \
+        ("+441632960000", "sip.example.net", "Registered", "Reachable", 21, "192.0.2.1", "from-trunk")
+    assert "secret" not in json.dumps(st)

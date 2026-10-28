@@ -122,6 +122,7 @@ async def gather_status(conn):
         "subscriptions": {"Action": "PJSIPShowSubscriptionsInbound"},
         "channels": {"Action": "CoreShowChannels"},
         "dialplan": {"Action": "ShowDialPlan"},
+        "registrations": {"Action": "PJSIPShowRegistrationsOutbound"},
     }
     names = list(lists)
     raw = {n: await attempt(conn.list(lists[n])) for n in names}
@@ -134,11 +135,29 @@ async def gather_status(conn):
 
     details = [await attempt(conn.list({"Action": "PJSIPShowEndpoint", "Endpoint": e["ObjectName"]}))
                for e in raw["endpoints"]]
-    endpoints = []
+    registrations = {r.get("ObjectName", ""): r for r in raw["registrations"]  # (not its AuthDetail: the password)
+                     if r.get("Event") == "OutboundRegistrationDetail"}
+    endpoints, trunks = [], []
     for e, d in zip(raw["endpoints"], details):
         d = [] if isinstance(d, Exception) else d
         ep = next((x for x in d if x.get("Event") == "EndpointDetail"), {})
         aor = next((x for x in d if x.get("Event") == "AorDetail"), {})
+        identify = [x for x in d if x.get("Event") == "IdentifyDetail"]
+        reg = registrations.get(e["ObjectName"])
+        if reg or identify:  # a trunk: registers out to a provider, or its calls are known by address
+            status = next((x for x in d if x.get("Event") == "ContactStatusDetail"), {})
+            m = re.match(r"sips?:([^@]+)@", (reg or {}).get("ClientUri", ""))
+            trunks.append({
+                "name": e["ObjectName"], "number": m.group(1) if m else ep.get("FromUser", ""),
+                "server": re.sub(r"^sips?:", "", (reg or {}).get("ServerUri", "")),
+                "registration": (reg or {}).get("Status", "") or ("" if reg else "not registering"),
+                "status": status.get("Status", ""), "rtt_ms": round(num(status.get("RoundtripUsec")) / 1000),
+                "context": ep.get("Context", ""), "codecs": ep.get("Allow", "").strip("()").replace("|", ", "),
+                "transport": ep.get("Transport", ""), "state": e.get("DeviceState", ""),
+                "channels": num(e.get("ActiveChannels")),
+                "match": ", ".join(re.sub(r"/255\.255\.255\.255", "", x.get("Match", "")) for x in identify),
+            })
+            continue
         endpoints.append({   # never the AuthDetail: it has the password
             "name": e["ObjectName"], "callerid": ep.get("Callerid", ""), "state": e.get("DeviceState", ""),
             "channels": num(e.get("ActiveChannels")), "context": ep.get("Context", ""),
@@ -165,7 +184,7 @@ async def gather_status(conn):
         ctx.setdefault(d["Extension"], []).append({"priority": d.get("Priority", ""), "app": d.get("Application", ""),
                                                    "data": d.get("AppData", "")})
     out.update(
-        endpoints=endpoints, contacts=contacts,
+        endpoints=endpoints, trunks=trunks, contacts=contacts,
         subscriptions=[{"endpoint": s.get("Endpoint", ""), "resource": s.get("Resource", ""),
                         "event": s.get("Event", s.get("SubscriptionType", "")), "expiry": s.get("Expiry", "")}
                        for s in raw["subscriptions"]],

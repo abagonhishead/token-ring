@@ -40,6 +40,7 @@ section[hidden] { display: none; }
 .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0;
            padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
 .card .body { padding: 12px 16px; }
+[hidden] { display: none !important; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 16px; }
 .grid .body { overflow-x: auto; }
 .grid .card { margin: 0; }
@@ -117,6 +118,7 @@ button.btn:disabled { opacity: .5; cursor: default; }
     <div class="card"><h2>Connections</h2><div class="body diagram-wrap"><svg class="diagram" id="diagram"></svg></div></div>
     <div class="grid">
       <div class="card"><h2>Devices</h2><div class="body"><table id="devices"></table></div></div>
+      <div class="card" id="trunks-card" hidden><h2>Trunks</h2><div class="body"><table id="trunks"></table></div></div>
       <div class="card"><h2>Services</h2><div class="body"><table id="services"></table></div></div>
       <div class="card"><h2>Calls &amp; voicemail</h2><div class="body" id="calls"></div></div>
       <div class="card"><h2>Dialplan</h2><div class="body"><table id="dialplan"></table></div></div>
@@ -214,6 +216,7 @@ function extInfo(e, ports) {
   else if (/Echo\(/.test(apps)) label = "audio echo";
   else if (/outgoing/.test(apps)) label = "ring-back test";
   else if (/Dial\(PJSIP\/\$\{EXTEN\}/.test(apps)) label = "dial a phone";
+  else if (/^Playback$/.test(label)) label = "plays " + (e.steps.find(s => s.app === "Playback").data.split("/").pop() || "a message");
   return {label, port, only: restricted ? restricted[1] : null};
 }
 function renderDiagram(st) {
@@ -222,6 +225,11 @@ function renderDiagram(st) {
   const devs = st.endpoints.map(ep => ({ep, c: st.contacts.find(c => c.endpoint === ep.name)}));
   const internal = (st.dialplan.find(d => d.context === "internal") || {extensions: []}).extensions
     .map(e => ({...e, ...extInfo(e, ports)}));
+  // calls in from each trunk: what its context does (not the catch-alls that only hang up)
+  const trunks = st.trunks || [];
+  const incoming = trunks.flatMap(t => ((st.dialplan.find(d => d.context === t.context) || {extensions: []}).extensions)
+    .filter(e => e.steps.some(s => s.app !== "Hangup"))
+    .map(e => ({...e, ...extInfo(e, ports), trunk: t})));
   const bridgeUp = ports.every(p => p.up);
   const svc = [
     {t: "Gateway", s: st.services.gateway.detail.replace(/assistant: |host: /g, "") || st.services.gateway.url, up: st.services.gateway.up},
@@ -231,7 +239,7 @@ function renderDiagram(st) {
   // columns: devices, Asterisk, extensions, bridge, services
   const X = [10, 285, 505, 745, 935], Wd = [225, 175, 190, 145, 200];
   const rowH = 70, nodeH = 58, top = 34;
-  const rows = Math.max(devs.length, internal.length, svc.length, 3);
+  const rows = Math.max(devs.length + trunks.length, internal.length + incoming.length, svc.length, 3);
   const H = top + rows * rowH + 6;
   const y = (i, n) => top + i * rowH + (rows - n) * rowH / 2;
   const clip = (t, n) => t.length > n ? t.slice(0, n - 1) + "…" : t;
@@ -241,7 +249,7 @@ function renderDiagram(st) {
     subs.filter(Boolean).map((t, i) => `<text class="sub" x="${x + 12}" y="${yy + 35 + i * 15}">${esc(t)}</text>`).join("");
   const curve = (x1, y1, x2, y2, cls) => { const mx = (x1 + x2) / 2;
     return `<path class="${cls}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`; };
-  let out = ["Devices", "Asterisk", "Extensions", "Bridge", "Services"].map((h, i) => `<text class="head" x="${X[i]}" y="16">${h}</text>`).join("");
+  let out = [trunks.length ? "Devices & trunks" : "Devices", "Asterisk", "Extensions", "Bridge", "Services"].map((h, i) => `<text class="head" x="${X[i]}" y="16">${h}</text>`).join("");
   let edges = "", nodes = "";
   // Asterisk: one tall box
   const ay = top, ah = rows * rowH - (rowH - nodeH);
@@ -249,17 +257,32 @@ function renderDiagram(st) {
   nodes += node(X[1], ay, Wd[1], ah, `Asterisk ${st.asterisk.version || ""}`, [
     ...st.transports.map(t => `${t.protocol.toUpperCase()} on ${t.bind.split(":").pop()}`), "",
     `${st.asterisk.calls ?? 0} call(s) now`, `up since ${(st.asterisk.started || "").slice(5, 16)}`], "core ok");
+  const left = devs.length + trunks.length;
   devs.forEach(({ep, c}, i) => {
-    const yy = y(i, devs.length), up = c && c.status === "Reachable";
+    const yy = y(i, left), up = c && c.status === "Reachable";
     const name = (ep.callerid.match(/"([^"]*)"/) || [])[1] || ep.callerid;
     nodes += node(X[0], yy, Wd[0], nodeH, `${ep.name} · ${name}`, c
       ? [clip(uaShort(c.user_agent), 34), `${c.ip} · ${c.transport}${ep.encryption !== "no" ? " · SRTP" : ""} · ${c.rtt_ms} ms`]
       : ["not registered"], c ? (up ? "ok" : "bad") : "idle");
     edges += curve(X[0] + Wd[0], yy + nodeH / 2, X[1], amid(yy + nodeH / 2), c ? (up ? "ok" : "bad") : "idle");
   });
+  trunks.forEach((t, i) => {
+    const yy = y(devs.length + i, left), up = t.registration === "Registered" || (!t.server && t.status === "Reachable");
+    nodes += node(X[0], yy, Wd[0], nodeH, `${t.name} · ${t.number}`, [
+      clip(`${t.server || t.match}${t.registration ? " · " + t.registration.toLowerCase() : ""}`, 34),
+      `trunk · ${t.codecs}${t.status === "Reachable" ? ` · ${t.rtt_ms} ms` : ""}`], up ? "ok trunk" : "bad trunk");
+    edges += curve(X[0] + Wd[0], yy + nodeH / 2, X[1], amid(yy + nodeH / 2), up ? "ok" : "bad");
+  });
   const bridgeY = top + (rows * rowH - (rowH - nodeH)) / 2 - nodeH / 2;
+  const middle = internal.length + incoming.length;
+  incoming.forEach((e, i) => {
+    const yy = y(internal.length + i, middle);
+    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`, [e.label]);
+    edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
+    if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
+  });
   internal.forEach((e, i) => {
-    const yy = y(i, internal.length);
+    const yy = y(i, middle);
     nodes += node(X[2], yy, Wd[2], nodeH, `${e.exten.replace(/^_/, "")}  ${e.label}`, [e.only ? `only from ${e.only}` : ""]);
     edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
     if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
@@ -286,6 +309,18 @@ function renderTables(st) {
         <td>${c ? `<span class="tag ${c.transport === "TLS" ? "ok" : ""}">${c.transport}</span>` : ""}<span class="tag ${ep.encryption !== "no" ? "ok" : ""}">${ep.encryption === "no" ? "RTP" : "SRTP"}</span></td>
         <td>${ep.mailboxes ? (sub ? '<span class="tag ok">subscribed</span>' : '<span class="tag warn">not subscribed</span>') : '<span class="muted">—</span>'}</td></tr>`;
     }).join("");
+  const trunks = st.trunks || [];
+  $("#trunks-card").hidden = !trunks.length;
+  $("#trunks").innerHTML = "<tr><th></th><th>Trunk</th><th>Provider</th><th>Status</th><th>Calls in</th></tr>" +
+    trunks.map(t => {
+      const up = t.registration === "Registered" || (!t.server && t.status === "Reachable");
+      return `<tr><td><span class="dot ${up ? "ok" : "bad"}"></span></td>
+        <td><strong>${esc(t.name)}</strong><div class="muted">${esc(t.number)}</div></td>
+        <td>${esc(t.server || "—")}<div class="muted">${esc(t.match)}</div></td>
+        <td>${t.server ? `<span class="tag ${t.registration === "Registered" ? "ok" : "bad"}">${esc(t.registration || "?")}</span>` : ""}<span class="tag">${esc(t.codecs)}</span>
+          <div class="muted">${t.status === "Reachable" ? `${t.rtt_ms} ms` : esc(t.status || "")}${t.channels ? ` · ${t.channels} call(s)` : ""}</div></td>
+        <td class="mono">${esc(t.context)}</td></tr>`;
+    }).join("");
   const s = st.services;
   const row = (up, name, detail) => `<tr><td><span class="dot ${up === null || up === undefined ? "" : up ? "ok" : "bad"}"></span></td><td>${esc(name)}</td><td class="muted">${esc(detail)}</td></tr>`;
   $("#services").innerHTML = s.bridge.map(p => row(p.up, `Bridge: ${p.name}`, `port ${p.port}`)).join("") +
@@ -310,7 +345,7 @@ async function refresh() {
     status = st;
     const bad = st.errors.length || !st.services.gateway.up || st.services.bridge.some(p => !p.up);
     $("#hdot").className = "dot " + (bad ? "warn" : "ok");
-    $("#hsub").textContent = `${st.host} · Asterisk ${st.asterisk.version || "?"} · ${st.contacts.length} device(s) registered`;
+    $("#hsub").textContent = `${st.host} · Asterisk ${st.asterisk.version || "?"} · ${st.contacts.filter(c => !(st.trunks || []).some(t => t.name === c.endpoint)).length} device(s) registered${(st.trunks || []).map(t => ` · ${t.name} ${(t.registration || t.status || "?").toLowerCase()}`).join("")}`;
     if (tab === "overview") { renderDiagram(st); renderTables(st); }
   } catch (e) {
     $("#hdot").className = "dot bad";
