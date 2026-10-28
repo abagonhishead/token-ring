@@ -10,7 +10,9 @@ It runs beside Asterisk and the bridge (docker compose: the web service), and re
     the gateway's (GET /logs, with the bridge's gateway login)
   - the configuration: Asterisk's files in [web] asterisk_dir and token-ring's config file.
 Editing (the page's Advanced switch) writes those files, keeping the previous version in
-<dir>/.backup, and reloads what changed.
+<dir>/.backup, and reloads what changed. The allowed callers (who may call in on the trunks) are
+edited in their own box: GET/PUT /api/callers, {"callers": [{"number", "name"}]}, kept in
+Asterisk's callers.conf.
 
 There's no login yet: keep it to your LAN or VPN.
 """
@@ -37,6 +39,7 @@ SECRET_KEY = re.compile(r"(secret|password|passwd|token|api_key)$", re.I)
 RELOADS = {
     "pjsip.conf": "module reload res_pjsip.so",
     "extensions.conf": "dialplan reload",
+    "callers.conf": "dialplan reload",
     "manager.conf": "manager reload",
     "logger.conf": "logger reload",
     "rtp.conf": "module reload res_rtp_asterisk.so",
@@ -420,6 +423,63 @@ def save_config(kind, name, text):
     return {"changed": True, **reload_asterisk(name)}
 
 
+# Allowed callers: who may call in on the trunks. callers.conf (included by extensions.conf) has
+# them as extensions of [allowed-callers], which the dialplan's [caller-allowed] checks the
+# caller's number against. Numbers from your own country (the dialplan's COUNTRY_CODE) are kept
+# in national form (0...), others as +<country code>..., as the dialplan turns caller IDs into.
+
+CALLERS_FILE = "callers.conf"
+CALLER_LINE = re.compile(r"^\s*exten\s*=>\s*([+\d]+)\s*,\s*1\s*,[^;\n]*(?:;\s*(.*?))?\s*$", re.M)
+
+
+def normalise_number(number, country):
+    n = re.sub(r"[\s().\-/]", "", number)
+    if not re.fullmatch(r"\+?\d{3,17}", n):
+        raise ValueError(f"{number!r} isn't a phone number")
+    if n.startswith("+"):
+        n = "00" + n[1:]
+    if country and n.startswith("00" + country):
+        n = "0" + n[2 + len(country):]
+    elif country and n.startswith(country) and len(n) >= len(country) + 9:
+        n = "0" + n[len(country):]    # the country code without the + (some networks send it so)
+    if n.startswith("00"):
+        n = "+" + n[2:]
+    return n
+
+
+async def country_code():
+    try:
+        resp = await bridge.ami_action({"Action": "Getvar", "Variable": "GLOBAL(COUNTRY_CODE)"}, login=ami_login())
+        return re.sub(r"\D", "", resp.get("Value") or "")
+    except Exception:
+        return ""
+
+
+def read_callers():
+    path = os.path.join(asterisk_dir(), CALLERS_FILE)
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return {"exists": False, "callers": []}
+    return {"exists": True, "callers": [{"number": n, "name": name or ""} for n, name in CALLER_LINE.findall(text)]}
+
+
+def write_callers(callers, country):
+    seen, lines = set(), []
+    for c in callers:
+        number = normalise_number(str(c.get("number", "")), country)
+        if number in seen:
+            continue
+        seen.add(number)
+        name = " ".join(re.sub(r"[;\r\n]+", " ", str(c.get("name", ""))).split())
+        lines.append(f"exten => {number},1,NoOp()" + (f" ; {name}" if name else ""))
+    text = ("; Who may call in on the trunks: the dialplan's [caller-allowed] looks the caller's number up\n"
+            "; here. Numbers from this country are in national form (0...), others +<country code>...\n"
+            "; The web page's Allowed callers box writes this file: one number per line, its name after ;\n"
+            "[allowed-callers]\n" + "".join(l + "\n" for l in lines))
+    return save_config("asterisk", CALLERS_FILE, text)
+
+
 def reload_asterisk(name):
     """Reload what a file belongs to; returns what Asterisk said, and the warnings it logged."""
     command = RELOADS.get(name, "core reload")
@@ -493,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.logs(q.get("source", "asterisk"), int(q.get("lines", 300)), q.get("follow") == "1")
             if path == "/api/config":
                 return self.reply(200, {"files": list_config()})
+            if path == "/api/callers":
+                return self.reply(200, {**read_callers(), "country_code": ami(country_code())})
             m = re.fullmatch(r"/api/config/(asterisk|token-ring)/([\w.-]+)", path)
             if m:
                 kind, name = m.groups()
@@ -525,6 +587,17 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def do_PUT(self):
+        if urllib.parse.urlsplit(self.path).path == "/api/callers":
+            callers = self.body().get("callers")
+            if not isinstance(callers, list):
+                return self.reply(400, {"error": "callers required"})
+            try:
+                return self.reply(200, {**write_callers(callers, ami(country_code())), **read_callers()})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception as e:
+                log.warning("save callers: %s", e)
+                return self.reply(500, {"error": str(e)})
         m = re.fullmatch(r"/api/config/(asterisk|token-ring)/([\w.-]+)", urllib.parse.urlsplit(self.path).path)
         if not m or not config_file(*m.groups()):
             return self.reply(404, {"error": "not found"})

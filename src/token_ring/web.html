@@ -72,7 +72,7 @@ svg.diagram path.idle { stroke-dasharray: 4 4; }
 .seg button { border: 0; background: var(--panel); color: var(--muted); padding: 5px 12px; cursor: pointer; font: inherit; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--code); color: var(--ink); font-weight: 600; }
-input[type=search], select { font: inherit; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
+input[type=search], input[type=text], input[type=tel], select { font: inherit; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
 button.btn { font: inherit; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
 button.btn:hover { border-color: var(--muted); }
 button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -119,6 +119,16 @@ button.btn:disabled { opacity: .5; cursor: default; }
     <div class="grid">
       <div class="card"><h2>Devices</h2><div class="body"><table id="devices"></table></div></div>
       <div class="card" id="trunks-card" hidden><h2>Trunks</h2><div class="body"><table id="trunks"></table></div></div>
+      <div class="card" id="callers-card" hidden><h2>Allowed callers</h2><div class="body">
+        <div class="muted">Only these numbers get through on the trunks: anyone else is cut off before the call's answered.</div>
+        <table id="callers" style="margin-top:8px"></table>
+        <form id="caller-add" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px" hidden>
+          <input type="text" id="caller-name" placeholder="Name" size="18">
+          <input type="tel" id="caller-number" placeholder="Number" size="16" required>
+          <button class="btn primary">Add</button>
+        </form>
+        <div id="callers-result" style="margin-top:8px"></div>
+      </div></div>
       <div class="card"><h2>Services</h2><div class="body"><table id="services"></table></div></div>
       <div class="card"><h2>Calls &amp; voicemail</h2><div class="body" id="calls"></div></div>
       <div class="card"><h2>Dialplan</h2><div class="body"><table id="dialplan"></table></div></div>
@@ -193,12 +203,13 @@ function showTab(t) {
   document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== t);
   if (t === "logs") startLogs(); else stopLogs();
   if (t === "config") loadFiles();
+  if (t === "overview") loadCallers();
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if (TABS.includes(t) && t !== tab) showTab(t); });
 const adv = $("#advanced");
 adv.checked = store.get("advanced", false);
-adv.onchange = () => { store.set("advanced", adv.checked); if (current) openFile(current.kind, current.name, true); };
+adv.onchange = () => { store.set("advanced", adv.checked); $("#callers-result").textContent = ""; renderCallers(); if (current) openFile(current.kind, current.name, true); };
 
 // Overview
 let status = null;
@@ -209,7 +220,7 @@ function uaShort(ua) {
 function extInfo(e, ports) {
   const apps = e.steps.map(s => `${s.app}(${s.data})`).join(" ");
   const restricted = /CHANNEL\(endpoint\)\}?"? != "(\d+)"/.exec(apps);
-  let label = e.steps.find(s => !/^(Answer|Progress|Playtones|Wait|StopPlaytones|GotoIf|NoOp|Set|Hangup)$/.test(s.app))?.app || "";
+  let label = e.steps.find(s => !/^(Answer|Progress|Playtones|Wait|StopPlaytones|GotoIf|ExecIf|Gosub|NoOp|Set|Hangup)$/.test(s.app))?.app || "";
   let port = null;
   const a = /AudioSocket\/[\d.]+:(\d+)/.exec(apps);
   if (a) { port = +a[1]; const p = ports.find(p => p.port === port); label = p ? p.name.replace(/\s*\(.*\)/, "") : `bridge ${port}`; }
@@ -217,7 +228,7 @@ function extInfo(e, ports) {
   else if (/outgoing/.test(apps)) label = "ring-back test";
   else if (/Dial\(PJSIP\/\$\{EXTEN\}/.test(apps)) label = "dial a phone";
   else if (/^Playback$/.test(label)) label = "plays " + (e.steps.find(s => s.app === "Playback").data.split("/").pop() || "a message");
-  return {label, port, only: restricted ? restricted[1] : null};
+  return {label, port, only: restricted ? restricted[1] : null, screened: /Gosub\(caller-allowed/.test(apps)};
 }
 function renderDiagram(st) {
   const svg = $("#diagram");
@@ -277,7 +288,7 @@ function renderDiagram(st) {
   const middle = internal.length + incoming.length;
   incoming.forEach((e, i) => {
     const yy = y(internal.length + i, middle);
-    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`, [e.label]);
+    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`, [e.label, e.screened ? "allowed callers only" : ""]);
     edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
     if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
   });
@@ -346,12 +357,52 @@ async function refresh() {
     const bad = st.errors.length || !st.services.gateway.up || st.services.bridge.some(p => !p.up);
     $("#hdot").className = "dot " + (bad ? "warn" : "ok");
     $("#hsub").textContent = `${st.host} · Asterisk ${st.asterisk.version || "?"} · ${st.contacts.filter(c => !(st.trunks || []).some(t => t.name === c.endpoint)).length} device(s) registered${(st.trunks || []).map(t => ` · ${t.name} ${(t.registration || t.status || "?").toLowerCase()}`).join("")}`;
-    if (tab === "overview") { renderDiagram(st); renderTables(st); }
+    if (tab === "overview") { renderDiagram(st); renderTables(st); renderCallers(); }
   } catch (e) {
     $("#hdot").className = "dot bad";
     $("#hsub").textContent = "can't reach the PBX: " + e.message;
   }
 }
+
+// Allowed callers (callers.conf): listed here, changed with Advanced on
+let callers = null;
+async function loadCallers() {
+  try { callers = await api("/api/callers"); } catch (e) { $("#callers-result").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  renderCallers();
+}
+function renderCallers() {
+  if (!callers) return;
+  $("#callers-card").hidden = !callers.exists && !(status && (status.trunks || []).length);
+  const edit = adv.checked;
+  $("#caller-add").hidden = !edit;
+  $("#callers").innerHTML = callers.callers.length
+    ? "<tr><th>Name</th><th>Number</th><th></th></tr>" + callers.callers.map((c, i) =>
+      `<tr><td>${esc(c.name) || '<span class="muted">—</span>'}</td><td class="mono">${esc(c.number)}</td>
+       <td style="text-align:right">${edit ? `<button class="btn danger" data-remove="${i}">Remove</button>` : ""}</td></tr>`).join("")
+    : '<tr><td class="muted">Nobody: every call in is cut off.</td></tr>';
+  document.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => {
+    const c = callers.callers[+b.dataset.remove];
+    if (confirm(`Stop ${c.name || c.number} getting through?`)) saveCallers(callers.callers.filter(x => x !== c));
+  });
+  if (!edit && !$("#callers-result").textContent) $("#callers-result").innerHTML = '<span class="muted">Switch on Advanced to change the list.</span>';
+}
+async function saveCallers(list) {
+  const res = $("#callers-result");
+  res.textContent = "Saving…";
+  try {
+    const r = await api("/api/callers", {method: "PUT", body: JSON.stringify({callers: list})});
+    callers = {...callers, ...r};
+    res.innerHTML = !r.changed ? "No changes." : `<strong>Saved.</strong> <span class="muted">${esc(r.reload || "")}</span>` +
+      (r.warnings && r.warnings.length ? `<pre class="err">${esc(r.warnings.join("\n"))}</pre>` : "");
+    renderCallers();
+    return true;
+  } catch (e) { res.innerHTML = `<span class="err">Not saved: ${esc(e.message)}</span>`; return false; }
+}
+$("#caller-add").onsubmit = async e => {
+  e.preventDefault();
+  const number = $("#caller-number").value.trim(), name = $("#caller-name").value.trim();
+  if (number && await saveCallers([...callers.callers, {name, number}])) { $("#caller-number").value = ""; $("#caller-name").value = ""; }
+};
 
 // Logs
 let src = store.get("logsrc", "asterisk"), es = null, lines = [];

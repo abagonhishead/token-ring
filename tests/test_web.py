@@ -96,6 +96,27 @@ def test_config_edit_and_backup(site):
     assert {(x["kind"], x["name"]): x for x in files["files"]}["asterisk", "pjsip.conf"]["edited"]
 
 
+def test_allowed_callers(site, monkeypatch):
+    base, etc, cfg, reloads = site
+
+    async def uk():
+        return "44"
+    monkeypatch.setattr(web, "country_code", uk)
+    code, r = call(base, "GET", "/api/callers")
+    assert r["exists"] is False and r["callers"] == [] and r["country_code"] == "44"
+    code, r = call(base, "PUT", "/api/callers", {"callers": [
+        {"name": "Someone", "number": "+44 7700 900123"}, {"name": "A; landline\n", "number": "01632 960000"},
+        {"name": "again", "number": "07700900123"}, {"number": "0033 1 23 45 67 89"}]})
+    assert code == 200 and r["changed"] and reloads == ["callers.conf"]
+    assert r["callers"] == [{"number": "07700900123", "name": "Someone"}, {"number": "01632960000", "name": "A landline"},
+                            {"number": "+33123456789", "name": ""}]
+    text = (etc / "callers.conf").read_text()
+    assert "[allowed-callers]\nexten => 07700900123,1,NoOp() ; Someone\n" in text
+    code, r = call(base, "PUT", "/api/callers", {"callers": [{"number": "not a number"}]})
+    assert code == 400 and "isn't a phone number" in r["error"]
+    assert (etc / "callers.conf").read_text() == text
+
+
 def test_config_refuses_bad_names_and_masked_text(site):
     base, etc, cfg, reloads = site
     assert call(base, "GET", "/api/config/asterisk/..%2Fpasswd")[0] == 404
