@@ -92,15 +92,15 @@ def gateway():
 OUTBOUND = {}  # AudioSocket UUID -> outbound call request from the gateway, until answered
 
 
-def ring(call):
-    """Have Asterisk ring the phone for an outbound call request; returns the UUID it'll come
-    back with. A call file is written beside the spool and moved in, so Asterisk never reads a
-    partial file."""
+def ring(call, channel, ring_seconds):
+    """Have Asterisk ring channel for an outbound call request; returns the UUID it'll come back
+    with. A call file is written beside the spool and moved in, so Asterisk never reads a partial
+    file."""
     c = bridge_conf()
     call_uuid = str(uuid.uuid4())
     label = re.sub(r"[^A-Za-z0-9 ._-]", "", call["label"])[:30]
     who = re.sub(r"[^A-Za-z0-9 ._-]", "", call.get("assistant") or c["caller_id"])[:20]
-    body = (f"Channel: {c['phone']}\nCallerID: \"{who}: {label}\" <600>\nWaitTime: {c['ring_seconds']}\n"
+    body = (f"Channel: {channel}\nCallerID: \"{who}: {label}\" <600>\nWaitTime: {ring_seconds}\n"
             f"MaxRetries: 0\nContext: token-ring-callback\nExtension: s\nPriority: 1\n"
             f"Setvar: TRUUID={call_uuid}\n")
     os.makedirs(c["staging"], exist_ok=True)
@@ -138,21 +138,41 @@ def on_outbound(ev, done):
     elif "mwi" in ev:
         asyncio.create_task(update_mwi(ev["id"], ev["mwi"].get("new", 0), ev["mwi"].get("old", 0)))
     elif "call" in ev:
-        call_id = ev["call"]
-        try:
-            call_uuid = ring(ev)
-        except OSError as e:
-            log.warning("outbound %s: couldn't write the call file: %s", call_id, e)
-            asyncio.create_task(report(call_id, "failed"))
-            return
-        log.info("outbound %s from %s: ringing (%s)", call_id, ev["key"], call_uuid[:8])
-        asyncio.create_task(report(call_id, "ringing"))
+        asyncio.create_task(place_call(ev))
 
-        def unanswered():
-            if OUTBOUND.pop(call_uuid, None):
-                log.info("outbound %s: no answer", call_id)
-                asyncio.create_task(report(call_id, "no answer"))
-        asyncio.get_running_loop().call_later(bridge_conf()["ring_seconds"] + 15, unanswered)
+
+async def place_call(call):
+    """Ring the phone for an outbound call request. With [bridge] phone_fallback set, a phone
+    that isn't reachable (a softphone asleep, say) gets REACH_WAIT_S to come back, then the
+    fallback (a mobile through a SIP trunk) is rung instead."""
+    c = bridge_conf()
+    call_id, channel, seconds = call["call"], c["phone"], c["ring_seconds"]
+    tech, _, endpoint = channel.partition("/")
+    if c.get("phone_fallback") and tech.upper() == "PJSIP":
+        try:
+            deadline = time.monotonic() + REACH_WAIT_S
+            while not await reachable(endpoint) and time.monotonic() < deadline:
+                await asyncio.sleep(2)
+            if not await reachable(endpoint):
+                channel, seconds = c["phone_fallback"], c["fallback_ring_seconds"]
+                call["fallback"] = True
+        except Exception as e:
+            log.warning("outbound %s: couldn't check the phone (%s); ringing it anyway", call_id, e)
+    try:
+        call_uuid = ring(call, channel, seconds)
+    except OSError as e:
+        log.warning("outbound %s: couldn't write the call file: %s", call_id, e)
+        await report(call_id, "failed")
+        return
+    log.info("outbound %s from %s: ringing %s (%s)", call_id, call["key"],
+             "the fallback (the phone isn't reachable)" if call.get("fallback") else "the phone", call_uuid[:8])
+    await report(call_id, "ringing")
+
+    def unanswered():
+        if OUTBOUND.pop(call_uuid, None):
+            log.info("outbound %s: no answer", call_id)
+            asyncio.create_task(report(call_id, "no answer"))
+    asyncio.get_running_loop().call_later(seconds + 15, unanswered)
 
 
 # Text messages to the phone, through Asterisk's manager interface (AMI): only sent while the
@@ -716,6 +736,24 @@ class Operator(Call):
             self.answering = None
             self.noise_db = a["floor"]
 
+    async def confirm_answer(self):
+        """A call to the fallback (a mobile): its voicemail mustn't take the call, so whoever
+        answers presses a key first. Asked twice; False if nobody does."""
+        self.confirming = asyncio.Event()
+        try:
+            for _ in range(2):
+                self.say(f"Hello, it's {self.assistant}. Press any key to talk, or hang up and call "
+                         "back.", "confirm")
+                await self.finish_speaking()
+                try:
+                    await asyncio.wait_for(self.confirming.wait(), 8)
+                    return True
+                except asyncio.TimeoutError:
+                    pass
+            return False
+        finally:
+            self.confirming = None
+
     def on_keyword(self, action, phrase):
         """A trigger word. Only acted on while speaking (barge-in); otherwise speech-to-text hears
         it like anything else."""
@@ -738,8 +776,16 @@ class Operator(Call):
             self.assistant = info["assistant"]
         if call:  # a session rang the phone: say why, then talk to that session
             log.info("%s outbound %s answered", self.uuid, call["call"])
-            asyncio.create_task(report(call["call"], "answered"))
-            await self.wait_for_hello()
+            if call.get("fallback"):
+                if not await self.confirm_answer():
+                    log.info("%s outbound %s: no key pressed (voicemail?)", self.uuid, call["call"])
+                    asyncio.create_task(report(call["call"], "no answer"))
+                    await self.hangup()
+                    return
+                asyncio.create_task(report(call["call"], "answered"))
+            else:
+                asyncio.create_task(report(call["call"], "answered"))
+                await self.wait_for_hello()
             who = "the operator" if call["key"] == "operator" else f"the {call['label']} session"
             await self.switch(call["key"], hello=f"Hello, this is a call from {self.assistant} on "
                                                 f"{call.get('host', 'the computer')}, {who}.")
@@ -961,6 +1007,10 @@ class Operator(Call):
             self.say(f"Sorry, that didn't work: {body.get('error', 'no answer from the session')}.", "dialog")
 
     async def on_dtmf(self, digit):
+        if getattr(self, "confirming", None):  # answering a call to the fallback
+            self.confirming.set()
+            self.hush()
+            return
         log.info("%s key %s: dialog %s, menu %s, queued %d", self.uuid, digit,
                  self.dialog and self.dialog["kind"], bool(self.menu), self.queue.qsize())
         await self.play(TICK)

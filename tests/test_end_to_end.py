@@ -345,3 +345,33 @@ def test_voicemail_light(system, conf, tmp_path, monkeypatch):
         assert ami.sent == []
         task.cancel()
     asyncio.run(main())
+
+
+def test_outbound_fallback(system, conf, tmp_path, monkeypatch):
+    """The phone isn't reachable: the fallback is rung, and talks once a key's pressed."""
+    ports, said, tmp = system
+    monkeypatch.setattr(bridge, "REACH_WAIT_S", 0.5)
+    text = (tmp_path / "config.toml").read_text().replace(
+        "[bridge]\n", '[bridge]\nphone_fallback = "PJSIP/07700900123@trunk"\n')
+    conf(text)
+    ami = FakeAMI()
+
+    async def main():
+        await serve(ports)
+        await asyncio.start_server(ami.handle, "127.0.0.1", ports["ami"])
+        task = asyncio.create_task(bridge.outbound_loop())
+        await until(lambda: gateway.G.outbound, timeout=5)
+        call = gw(ports, "POST", "/calls", {"key": "alpha", "message": "All done."})
+        await until(lambda: os.listdir(tmp / "spool"), timeout=5)
+        body = (tmp / "spool" / os.listdir(tmp / "spool")[0]).read_text()
+        assert "Channel: PJSIP/07700900123@trunk" in body and "WaitTime: 20" in body
+        call_uuid = body.split("TRUUID=")[1].strip()
+        async with Caller(ports["op"], call_uuid) as c:
+            await until(said_has(said, "Press any key to talk"))
+            assert gw(ports, "GET", f"/calls/{call['id']}")["status"] == "ringing"
+            await c.key("5")
+            await until(said_has(said, "this is a call from Echo on"))
+            await until(said_has(said, "All done."))
+        assert gw(ports, "GET", f"/calls/{call['id']}")["status"] == "answered"
+        task.cancel()
+    asyncio.run(main())

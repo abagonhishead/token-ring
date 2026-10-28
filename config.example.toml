@@ -23,6 +23,10 @@ caller_id = "Claude"           # their caller ID is "<this>: <session>" (the gat
 spool = "/var/spool/asterisk/outgoing"
 staging = "/var/spool/asterisk/token-ring"  # must be on the same filesystem as spool
 ring_seconds = 30
+phone_fallback = ""            # rung instead when the phone isn't reachable (a softphone asleep):
+                               # e.g. a mobile through a SIP trunk, "PJSIP/07700900123@trunk".
+                               # Whoever answers presses a key first, so its voicemail can't
+fallback_ring_seconds = 20     # less than the mobile takes to divert to its voicemail
 gateway_url = "http://127.0.0.1:9096"
 gateway_token_file = "/run/secrets/token"   # or gateway_token = "...", or $TOKEN_RING_TOKEN
 gateway_ca_file = ""           # CA bundle, for an https gateway_url with a private CA

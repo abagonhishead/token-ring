@@ -24,6 +24,9 @@ DEFAULTS = {
         "spool": "/var/spool/asterisk/outgoing",
         "staging": "/var/spool/asterisk/token-ring",  # same filesystem as spool
         "ring_seconds": 30,
+        "phone_fallback": "",          # rung instead when the phone isn't reachable, e.g. a mobile
+                                       # through a SIP trunk: "PJSIP/07700900123@trunk"
+        "fallback_ring_seconds": 20,   # less than the mobile takes to divert to its voicemail
         "gateway_url": "http://127.0.0.1:9096",
         "gateway_token": "",           # or gateway_token_file, or $TOKEN_RING_TOKEN
         "gateway_token_file": "~/.config/token-ring/token",
