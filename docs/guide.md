@@ -92,7 +92,7 @@ sudo chown 1000:1000 secrets/* && chmod 640 secrets/*   # the containers run as 
 docker compose --profile stt up -d        # Asterisk, the bridge, Piper and speaches
 ```
 
-The first build compiles Asterisk, which takes a while (about 20 minutes on a Raspberry Pi 5).
+The first build compiles Asterisk from source, which takes a while.
 Register your phone as extension 100 at the machine's address on port 5060, and dial 601 to
 check speech both ways.
 
@@ -186,7 +186,7 @@ rates.
 
 | type | What |
 |---|---|
-| `piper` | [Piper](https://github.com/OHF-Voice/piper1-gpl)'s HTTP server (`docker/piper`); fast enough on a Raspberry Pi |
+| `piper` | [Piper](https://github.com/OHF-Voice/piper1-gpl)'s HTTP server (`docker/piper`); fast on a CPU |
 | `openai` | Any server with OpenAI's speech API: OpenAI, [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI), speaches, LocalAI |
 | `command` | Run a command per sentence: text on stdin, WAV on stdout (espeak-ng, ...) |
 
@@ -194,7 +194,7 @@ rates.
 
 Barge-in needs to hear "stop" within half a second of it being said, so a small Vosk model with
 a grammar of just the trigger phrases runs inside the bridge (about 40 MB, a few percent of a
-Pi 4's CPU). Switch it off with `engine = "off"`, or point `model` at another Vosk model (other
+small CPU). Switch it off with `engine = "off"`, or point `model` at another Vosk model (other
 languages).
 
 ### AI backends (`[gateway] backend`)

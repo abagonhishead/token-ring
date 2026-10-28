@@ -24,11 +24,11 @@ when they need you.
 
 | | What works |
 |---|---|
-| A machine for the PBX | Linux with Docker and Compose. A Raspberry Pi 4 or 5 is enough. Asterisk, the bridge and Piper run there in containers |
+| A machine for the PBX | Any Linux machine with Docker and Compose (amd64 or arm64). Asterisk, the bridge and Piper run there in containers, and need little CPU |
 | A SIP phone | Any SIP phone or softphone. Linphone can be set up from a one-time link, with TLS and SRTP |
 | Speech-to-text | Whisper is best. Use a server with OpenAI's transcription API: [speaches](https://github.com/speaches-ai/speaches) (a compose profile here; it wants a GPU or a fast CPU), OpenAI or Groq (cloud), or whisper.cpp. Or use any HTTP or command-line engine. Vosk runs offline inside the bridge, but it's much less accurate |
-| Text-to-speech | [Piper](https://github.com/OHF-Voice/piper1-gpl) (included: fast enough on a Pi), anything with OpenAI's speech API (OpenAI, Kokoro, ...), or any command |
-| An AI agent | [Claude Code](https://claude.com/claude-code), installed and logged in where the gateway runs. It can be headless, or interactive sessions in tmux, which can also be Remote Control sessions. Other AIs can be added as plug-ins, and an `echo` backend lets you try the phone side without one |
+| Text-to-speech | [Piper](https://github.com/OHF-Voice/piper1-gpl) (included, and fast on a CPU), anything with OpenAI's speech API (OpenAI, Kokoro, ...), or any command |
+| An AI agent | [Claude Code](https://claude.com/claude-code), installed and logged in where the gateway runs. Phone conversations run it headless; to talk to your existing sessions, run them as interactive `claude` in tmux (they're found automatically, and can also be Remote Control sessions). Other AIs can be added as plug-ins, and an `echo` backend lets you try the phone side without one |
 | Optional | A SIP trunk (a real number) and a VPN such as WireGuard for using the phone away from home |
 
 ## Getting started
@@ -43,7 +43,7 @@ mkdir -p secrets && openssl rand -hex 32 > secrets/token
 docker compose --profile stt up -d      # Asterisk, the bridge, Piper and speaches
 ```
 
-The first build compiles Asterisk, which takes about 20 minutes on a Pi 5. Register your phone as
+The first build compiles Asterisk from source, which takes a while. Register your phone as
 extension 100, then dial 601 to check speech both ways. Set `[gateway] backend = "echo"` to try
 the phone side without an AI. Then run the gateway beside your agents (`pipx install .` and the
 systemd unit in `systemd/`), and give them `docs/agents.md`.
