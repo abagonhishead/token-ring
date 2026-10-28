@@ -4,17 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>token-ring PBX</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #667085; --line: #e3e6eb;
   --accent: #e8590c; --ok: #2f9e44; --warn: #e67700; --bad: #e03131; --idle: #adb5bd;
   --code: #f1f3f5; --shadow: 0 1px 2px rgba(16,24,40,.06);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --syn-key: #1c5fb8; --syn-str: #2b8a3e; --syn-num: #b35c00; --syn-sec: #9c36b5; --syn-var: #0b7285;
+  --syn-app: #c2255c; --syn-kw: #5f3dc4;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #111418; --panel: #1a1f26; --ink: #e6e9ee; --muted: #8b95a5; --line: #2a313b;
           --accent: #ff7a33; --ok: #51cf66; --warn: #ffa94d; --bad: #ff6b6b; --idle: #5c6670;
-          --code: #12161b; --shadow: none; }
+          --code: #12161b; --shadow: none;
+          --syn-key: #74c0fc; --syn-str: #8ce99a; --syn-num: #ffc078; --syn-sec: #e599f7; --syn-var: #66d9e8;
+          --syn-app: #faa2c1; --syn-kw: #b197fc; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
@@ -84,6 +89,7 @@ button.btn:disabled { opacity: .5; cursor: default; }
 #loglines mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; }
 /* Config */
 .cfg { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
+.cfg > .card { min-width: 0; }   /* long lines scroll inside the editor, not the page */
 @media (max-width: 760px) { .cfg { grid-template-columns: 1fr; } }
 .files { list-style: none; margin: 0; padding: 6px; }
 .files li { padding: 6px 10px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
@@ -93,6 +99,23 @@ button.btn:disabled { opacity: .5; cursor: default; }
 .editor { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; width: 100%; min-height: calc(100vh - 290px);
           border: 0; padding: 12px 16px; background: var(--code); color: var(--ink); resize: vertical; tab-size: 4; border-radius: 0 0 10px 10px; }
 .editor:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* CodeMirror (when the CDN is reachable; otherwise the plain textarea above) */
+.cfg .CodeMirror { height: calc(100vh - 290px); min-height: 300px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+                   background: var(--code); color: var(--ink); border-radius: 0 0 10px 10px; }
+.cfg .CodeMirror-focused { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cfg .CodeMirror-gutters { background: var(--code); border-right: 1px solid var(--line); }
+.cfg .CodeMirror-linenumber { color: var(--muted); }
+.cfg .CodeMirror-cursor { border-left-color: var(--ink); }
+.cfg .CodeMirror-selected, .cfg .CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.cm-s-tr .cm-comment { color: var(--muted); font-style: italic; }
+.cm-s-tr .cm-header, .cm-s-tr .cm-atom { color: var(--syn-sec); font-weight: 600; }
+.cm-s-tr .cm-property { color: var(--syn-key); }
+.cm-s-tr .cm-string { color: var(--syn-str); }
+.cm-s-tr .cm-number { color: var(--syn-num); }
+.cm-s-tr .cm-variable-2 { color: var(--syn-var); }
+.cm-s-tr .cm-builtin { color: var(--syn-app); }
+.cm-s-tr .cm-keyword, .cm-s-tr .cm-meta { color: var(--syn-kw); font-weight: 600; }
+.cm-s-tr .cm-operator, .cm-s-tr .cm-bracket { color: var(--muted); }
 .result { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 13px; }
 .result pre { margin: 6px 0 0; white-space: pre-wrap; }
 .note { padding: 10px 16px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); }
@@ -178,6 +201,9 @@ button.btn:disabled { opacity: .5; cursor: default; }
   </section>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/simple.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/toml/toml.min.js"></script>
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
@@ -202,7 +228,7 @@ function showTab(t) {
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== t);
   if (t === "logs") startLogs(); else stopLogs();
-  if (t === "config") loadFiles();
+  if (t === "config") { loadFiles(); if (cm) setTimeout(() => cm.refresh()); }
   if (t === "overview") loadCallers();
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
@@ -455,6 +481,49 @@ $("#logclear").onclick = () => { lines = []; renderLogs(); };
 
 // Configuration
 let files = [], current = null, loaded = "";
+// The editor: CodeMirror with highlighting if it loaded from the CDN, else the plain textarea
+if (window.CodeMirror && CodeMirror.defineSimpleMode) {
+  // Asterisk's .conf files: [sections](templates), ; comments, key = value, exten => ..., ${VARS}, App(...)
+  CodeMirror.defineSimpleMode("asterisk", {
+    start: [
+      {regex: /\\./, token: "string"},
+      {regex: /;.*/, token: "comment"},
+      {regex: /\s*\[[^\]]*\](?:\([^)]*\))?/, sol: true, token: "header"},
+      {regex: /\s*#(?:include|tryinclude|exec)\b/, sol: true, token: "meta"},
+      {regex: /(\s*)(exten|same|include|switch|ignorepat)(\s*)(=>)/, sol: true, token: [null, "keyword", null, "operator"]},
+      {regex: /(\s*)([\w.\-]+)(\s*)(=>?)/, sol: true, token: [null, "property", null, "operator"]},
+      {regex: /\$\{/, token: "variable-2", push: "variable"},
+      {regex: /\$\[/, token: "variable-2"},
+      {regex: /[A-Za-z]\w*(?=\()/, token: "builtin"},
+      {regex: /[A-Za-z_][\w-]*/, token: null},        // other words, whole (so g722 isn't a number)
+      {regex: /"(?:[^\\"]|\\.)*"/, token: "string"},
+      {regex: /\b\d+(?:\.\d+)?\b/, token: "number"},
+    ],
+    variable: [
+      {regex: /\}/, token: "variable-2", pop: true},
+      {regex: /\$\{/, token: "variable-2", push: "variable"},
+      {regex: /[^${}]+|./, token: "variable-2"},
+    ],
+    meta: {lineComment: ";"},
+  });
+}
+const cm = window.CodeMirror ? CodeMirror.fromTextArea($("#editor"), {
+  lineNumbers: true, theme: "tr", indentUnit: 4, tabSize: 4, viewportMargin: Infinity, readOnly: true,
+  extraKeys: {
+    "Ctrl-S": () => { if (!$("#save").hidden) save(); }, "Cmd-S": () => { if (!$("#save").hidden) save(); },
+    Tab: c => c.replaceSelection("    "),
+  },
+}) : null;
+const ed = {
+  get value() { return cm ? cm.getValue() : $("#editor").value; },
+  set value(v) { if (cm) cm.setValue(v); else $("#editor").value = v; },
+  get readOnly() { return cm ? cm.getOption("readOnly") === true : $("#editor").readOnly; },
+  set readOnly(ro) { if (cm) cm.setOption("readOnly", ro); $("#editor").readOnly = ro; },
+  open(text, mode) {   // a new file: its text, highlighting, and no undo back into the last one
+    this.value = text;
+    if (cm) { cm.setOption("mode", mode); cm.clearHistory(); cm.refresh(); }
+  },
+};
 async function loadFiles() {
   try { files = (await api("/api/config")).files; } catch (e) { $("#files").innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
   const empty = $("#showempty").checked;
@@ -467,7 +536,6 @@ async function loadFiles() {
 }
 $("#showempty").onchange = loadFiles;
 async function openFile(kind, name, keepResult) {
-  const ed = $("#editor");
   if (current && ed.value !== loaded && !ed.readOnly && !confirm("Discard your unsaved changes?")) return;
   const raw = adv.checked;
   let f;
@@ -478,7 +546,7 @@ async function openFile(kind, name, keepResult) {
   $("#cfgname").textContent = (kind === "token-ring" ? "token-ring: " : "") + name;
   const meta = files.find(x => x.kind === kind && x.name === name) || {};
   $("#cfgtags").innerHTML = (meta.edited ? '<span class="tag warn">edited here</span>' : "") + (meta.image_new ? '<span class="tag bad">image has a newer version</span>' : "");
-  ed.value = f.content; ed.readOnly = !raw;
+  ed.readOnly = !raw; ed.open(f.content, kind === "token-ring" ? "toml" : "asterisk");
   ["#save", "#revert", "#restart"].forEach(s => $(s).hidden = !raw);
   $("#restart").hidden = !raw || kind !== "asterisk";
   $("#imagever").hidden = !raw || !f.image;
@@ -504,8 +572,8 @@ async function save() {
   res.hidden = false; res.innerHTML = "Saving…";
   $("#save").disabled = true;
   try {
-    const r = await api(`/api/config/${current.kind}/${encodeURIComponent(current.name)}`, {method: "PUT", body: JSON.stringify({content: $("#editor").value})});
-    loaded = $("#editor").value;
+    const r = await api(`/api/config/${current.kind}/${encodeURIComponent(current.name)}`, {method: "PUT", body: JSON.stringify({content: ed.value})});
+    loaded = ed.value;
     res.innerHTML = !r.changed ? "No changes." : `<strong>Saved.</strong> ${esc(r.reload || "")}` +
       (r.restart ? ' <button class="btn danger" onclick="restart()">Restart Asterisk now</button>' : "") +
       (r.warnings && r.warnings.length ? `<pre class="err">${esc(r.warnings.join("\n"))}</pre>` : (r.warnings ? '<div class="muted">No warnings logged.</div>' : ""));
@@ -514,13 +582,13 @@ async function save() {
   $("#save").disabled = false;
 }
 $("#save").onclick = save;
-$("#revert").onclick = () => { $("#editor").value = loaded; $("#result").hidden = true; };
-$("#imagever").onclick = () => { if (current.image != null && confirm("Load the image's version into the editor? (Nothing is saved until you press Save.)")) $("#editor").value = current.image; };
+$("#revert").onclick = () => { ed.value = loaded; $("#result").hidden = true; };
+$("#imagever").onclick = () => { if (current.image != null && confirm("Load the image's version into the editor? (Nothing is saved until you press Save.)")) ed.value = current.image; };
 $("#backups").onchange = async e => {
   const b = e.target.value; e.target.value = "";
   if (!b) return;
   const r = await api(`/api/config/${current.kind}/${encodeURIComponent(current.name)}/backup/${encodeURIComponent(b)}`);
-  $("#editor").value = r.content;
+  ed.value = r.content;
   $("#result").hidden = false; $("#result").textContent = `Loaded ${b} into the editor: press Save to put it back.`;
 };
 async function restart() {
