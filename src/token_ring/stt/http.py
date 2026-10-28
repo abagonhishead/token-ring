@@ -1,6 +1,6 @@
 """The simplest possible STT server protocol: POST the raw audio (16 kHz, 16-bit mono
 little-endian PCM, Content-Type application/octet-stream), get back JSON {"text": "..."}.
-extras/hailo-stt is a server that speaks it.
+Wrap any engine (an accelerator, a model of your own) in a small server that speaks it.
 
 [stt]
 engine = "http"

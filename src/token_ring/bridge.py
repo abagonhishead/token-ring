@@ -881,8 +881,8 @@ class Operator(Call):
     async def switch(self, key, hello=None):
         """Talk to target key from now on (starting it if needed)."""
         old = self.target
-        if old and old["kind"] == "tmux" and key != self.key:
-            old["stop"].set()  # only the current Remote Control session is followed
+        if old and old["kind"] == "session" and key != self.key:
+            old["stop"].set()  # only the current session is followed
             del self.targets[self.key]
         self.menu = self.dialog = None
         if key == "operator" and key not in self.targets:
@@ -898,7 +898,7 @@ class Operator(Call):
             if not session or session["status"] == "down":
                 self.say(f"{session['label'] if session else key} isn't running.", "down")
                 return
-            self.targets[key] = {"kind": "tmux", "label": session["label"], "status": session["status"],
+            self.targets[key] = {"kind": "session", "label": session["label"], "status": session["status"],
                                  "stop": self.stream(key, f"/sessions/{key}/events")}
         self.key = key
         log.info("%s talking to %s", self.uuid, key)

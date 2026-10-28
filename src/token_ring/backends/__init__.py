@@ -4,9 +4,10 @@ A backend offers two things to a phone call:
 
 - Conversations: new, for one call (the operator, or a new conversation in a session's
   directory). The gateway starts one when the call needs it and closes it when the call ends.
-- Sessions: existing, long-lived conversations the caller can be put through to (for Claude
-  Code, interactive sessions running in tmux). The call types into them like someone at the
-  keyboard and follows their output.
+- Sessions: existing, long-lived conversations the caller can be put through to. The call
+  sends them text, key presses and interrupts like someone at the keyboard, and follows their
+  output. How a backend reaches them is up to it (Claude Code's are interactive sessions in
+  tmux; another could use an API).
 
 Write your own by subclassing Backend (and Conversation, Session), naming it in the config as
 [gateway] backend = "module:Class", or registering it as a token_ring.backends entry point. The

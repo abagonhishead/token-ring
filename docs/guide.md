@@ -173,7 +173,7 @@ asking the AI on the phone to change them).
 | engine | What |
 |---|---|
 | `openai` | Any server with OpenAI's transcription API: OpenAI, Groq, [speaches](https://github.com/speaches-ai/speaches), faster-whisper-server, LocalAI, whisper.cpp's server |
-| `http` | POST raw 16 kHz 16-bit mono PCM, get `{"text": ...}` back. `extras/hailo-stt` is a server for the Hailo-10H accelerator |
+| `http` | POST raw 16 kHz 16-bit mono PCM, get `{"text": ...}` back: a small server of your own around any engine |
 | `command` | Run a command per utterance: WAV on stdin, text on stdout |
 | `vosk` | Vosk, offline in the bridge: light, but much less accurate than Whisper |
 
@@ -261,7 +261,6 @@ class = "my_alarm:AlarmCall"     # importable in the bridge (add it to your brid
 | `compose.yaml` | Everything together, with host networking |
 | `docs/agents.md` | What to tell your AI agents: ringing you, voicemail, talking on the phone |
 | `systemd/` | Units for running the gateway or bridge on the host instead |
-| `extras/hailo-stt/` | Whisper on a Hailo-10H accelerator, as an `http` speech-to-text server |
 | `tests/` | `pytest`: unit tests, and the bridge and gateway end to end with a fake Asterisk |
 | `ROADMAP.md` | What's next: a web UI, encrypted calls, texting sessions, ... |
 
