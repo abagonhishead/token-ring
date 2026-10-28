@@ -12,3 +12,11 @@ CLAUDE.md
 .claude/
 build/
 .pytest_cache/
+# Certificates and keys (./tls is mounted into the containers)
+tls/
+*.pem
+*.key
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
