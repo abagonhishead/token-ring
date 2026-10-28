@@ -419,16 +419,29 @@ class Gateway:
             log.info("text operator: finished")
 
     def notice(self, fresh, conf):
-        dial = self.dial()
-        if len(fresh) == 1:
-            m = fresh[0]
-            preview = f": {m['text'][:conf.get('preview_chars', 160)]}" if conf.get("preview", True) else "."
-            return f"New voicemail from {m['label']}{preview}{dial}"
-        return f"{len(fresh)} new voicemails, from {self.who(fresh)}.{dial}"
+        n = len(fresh)
+        head = f"You have {n} new voicemail{'' if n == 1 else 's'} from {self.who(fresh)}."
+        if not conf.get("preview", True):
+            return head + self.dial()
+        if n == 1:
+            if not fresh[0].get("text"):  # a recording: nothing to quote
+                return head + self.dial()
+            return f"{head}\nThe message says:\n{self.preview(fresh[0], conf)}"
+        return head + "".join(f"\n\nFrom {m['label']}:\n{self.preview(m, conf)}" for m in fresh)
+
+    def preview(self, m, conf):
+        limit = conf.get("preview_chars", 160)
+        text = (m.get("text") or "").strip()
+        if not text:
+            return "A recording." + self.dial()
+        if not limit or len(text) <= limit:
+            return text
+        dial = self.dial().replace("to listen", "to hear the rest")
+        return text[:limit].rstrip() + "…" + dial
 
     def reminder(self, unheard):
         n = len(unheard)
-        return f"You have {n} new voicemail{'' if n == 1 else 's'}, from {self.who(unheard)}.{self.dial()}"
+        return f"You have {n} new voicemail{'' if n == 1 else 's'} from {self.who(unheard)}.{self.dial()}"
 
     @staticmethod
     def who(messages):

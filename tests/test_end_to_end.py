@@ -289,9 +289,9 @@ def test_voicemail_texts(system, monkeypatch):
         assert ami.sent == []  # the phone isn't there: the notification waits
         ami.reachable = True
         await until(lambda: ami.sent)
-        assert ami.sent[0] == "New voicemail from beta: The build passed. Dial 201 to listen."
+        assert ami.sent[0] == "You have 1 new voicemail from beta.\nThe message says:\nThe build passed."
         await until(lambda: len(ami.sent) >= 2)  # unheard: a reminder
-        assert ami.sent[1] == "You have 1 new voicemail, from beta. Dial 201 to listen."
+        assert ami.sent[1] == "You have 1 new voicemail from beta. Dial 201 to listen."
 
         ami.text_from_phone("ok")  # read it: no more reminders
         await asyncio.sleep(0.5)
@@ -300,7 +300,7 @@ def test_voicemail_texts(system, monkeypatch):
         assert len(ami.sent) == count
 
         gw(ports, "POST", "/voicemail", {"key": "alpha", "message": "Deploy finished."})
-        await until(lambda: any("from alpha: Deploy finished." in t for t in ami.sent))
+        await until(lambda: any(t.endswith("from alpha.\nThe message says:\nDeploy finished.") for t in ami.sent))
         assert set(ami.froms) == {"201"}
 
         # Texting the operator: its reply comes back from 200

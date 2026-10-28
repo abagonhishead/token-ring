@@ -133,7 +133,8 @@ via = []                       # "phone" (a text message, through Asterisk), "nt
                                # phone's voicemail light: needs mailboxes = on its AOR, and the
                                # phone subscribing to it, as provisioning sets up)
 remind_every_minutes = 60      # 0: no reminders
-preview = true                 # include the start of the message
+preview = true                 # include the message in the text
+preview_chars = 160            # up to this much of it (0: all), then "Dial ... to hear the rest"
 [notify.ntfy]
 # url = "https://ntfy.sh/your-secret-topic"   # or your own ntfy server
 # token_env = "NTFY_TOKEN"

@@ -19,6 +19,12 @@ Ideas and known gaps, roughly in order of how much they'd help. Nothing here is 
   SIP trunk instead (an unanswered call costs nothing, and you can call back on the softphone).
   A push through ntfy might also wake it.
 
+- **Two kinds of voicemail.** Agent voicemail (what there is now): left by sessions as text, read
+  out in their voice, and you can reply or carry on the conversation. Plain voicemail: messages
+  from people (callers to a trunk number, say), kept as the caller's own audio and played back as
+  recorded. The text announcing one can quote a speech-to-text transcript, but listening always
+  plays the recording.
+
 ## Later
 
 - **Read receipts for texts.** Linphone sends IMDN receipts (in CPIM), but Asterisk only accepts
