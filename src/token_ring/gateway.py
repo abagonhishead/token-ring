@@ -68,10 +68,11 @@ Voicemail (text: read out in the sender's voice). Messages for the user are in
   GET  /logs?lines=N&follow=1     the gateway's recent log lines, {"line"} per line (the web page),
                                  then new ones as they're logged while the connection lasts
   GET  /voicemail                {"messages": [{"id", "from", "label", "text", "at", "heard"}],
+                                 the user's mailbox; ?mailbox=<extension> another phone's
                                  "new": n}, oldest first
   POST /voicemail                {"key", "message"}, local only (`token-ring voicemail`)
-  POST /voicemail/<id>/heard     mark it heard (kept as saved)
-  POST /voicemail/<id>/delete    delete it
+  POST /voicemail/<id>/heard     mark it heard (kept as saved); ?mailbox= as for GET, and only a
+  POST /voicemail/<id>/delete    delete it                       message in that mailbox
   POST /voicemail/to/<key>       {"text"}: from the phone, a message for that session; sent with
                                  VM_PREFIX when it's up with no dialog showing
 
@@ -302,7 +303,7 @@ class Gateway:
         channels = conf.get("via", [])
         if not channels:
             return
-        inbox = self.vm_list("inbox")
+        inbox = [m for m in self.vm_list("inbox") if not m.get("mailbox")]   # the user's mailbox
         unheard = [m for m in inbox if not m.get("heard")]
         state = self.notify_state()
         for via in channels:
@@ -602,8 +603,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/logs":
             q = urllib.parse.parse_qs(url.query)
             return self.logs(int(q.get("lines", ["500"])[0]), q.get("follow", ["0"])[0] == "1")
-        if self.path == "/voicemail":
-            messages = G.vm_list("inbox")
+        if url.path == "/voicemail":  # one phone's mailbox: the user's, or ?mailbox=<extension>
+            box = urllib.parse.parse_qs(url.query).get("mailbox", [""])[0]
+            messages = [m for m in G.vm_list("inbox") if m.get("mailbox", "") == box]
             return self.reply(200, {"messages": messages, "new": sum(not m["heard"] for m in messages)})
         m = re.fullmatch(r"/calls/([0-9a-f]+)", self.path)
         if m:
@@ -766,11 +768,18 @@ class Handler(BaseHTTPRequestHandler):
             G.vm_deliver.set()
             log.info("voicemail %s for %s: %r", item["id"], key, item["text"][:80])
             return self.reply(200, {"id": item["id"]})
-        m = re.fullmatch(r"/voicemail/([0-9a-f]+)/(heard|delete)", self.path)
+        url = urllib.parse.urlsplit(self.path)
+        m = re.fullmatch(r"/voicemail/([0-9a-f]+)/(heard|delete)", url.path)
         if not m:
             return self.reply(404, {"error": "not found"})
         path = os.path.join(G.vm_dir, "inbox", f"{m.group(1)}.json")
-        if not os.path.exists(path):
+        box = urllib.parse.parse_qs(url.query).get("mailbox", [""])[0]
+        try:
+            with open(path) as f:
+                owner = json.load(f).get("mailbox", "")
+        except (OSError, ValueError):
+            return self.reply(404, {"error": "no such message"})
+        if owner != box:   # another phone's message: as good as not there
             return self.reply(404, {"error": "no such message"})
         if m.group(2) == "delete":
             os.remove(path)

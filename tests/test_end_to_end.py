@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import threading
+import time
 import urllib.request
 import uuid
 
@@ -79,8 +80,10 @@ def replies(*texts):
 class Caller:
     """A fake Asterisk channel: AudioSocket frames both ways."""
 
-    def __init__(self, port, call_uuid=None):
+    def __init__(self, port, call_uuid=None, endpoint="100"):
         self.port, self.uuid = port, call_uuid or str(uuid.uuid4())
+        if endpoint:   # what the dialplan's TokenRingCall event tells the bridge: which phone this is
+            bridge.CALLERS[self.uuid] = (endpoint, time.monotonic())
         self.hung_up = False
         self.heard_at = 0.0
 
@@ -205,6 +208,20 @@ def test_voicemail_and_outbound(system):
             await until(said_has(said, "New message from beta, today at"))
             await until(said_has(said, "The build passed."))
         assert gw(ports, "GET", "/voicemail")["new"] == 0
+
+        # Another phone has its own (empty) mailbox, and can't touch the user's messages
+        said.clear()
+        async with Caller(ports["vm"], endpoint="101") as c:
+            await until(said_has(said, "You have no new messages"))
+        msg_id = gw(ports, "GET", "/voicemail")["messages"][0]["id"]
+        with pytest.raises(urllib.error.HTTPError):
+            gw(ports, "POST", f"/voicemail/{msg_id}/delete?mailbox=101")
+        assert gw(ports, "GET", "/voicemail?mailbox=101")["messages"] == []
+        assert len(gw(ports, "GET", "/voicemail")["messages"]) == 1
+        # ...and a call that can't be tied to a phone hears nothing
+        said.clear()
+        async with Caller(ports["vm"], endpoint=None) as c:
+            await until(said_has(said, "voicemail isn't available"), timeout=5)
 
         await until(lambda: gateway.G.outbound, timeout=5)  # the bridge's feed is connected
         call = gw(ports, "POST", "/calls", {"key": "alpha", "message": "All done."})

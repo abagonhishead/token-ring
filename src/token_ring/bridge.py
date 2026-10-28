@@ -31,6 +31,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 import uuid
 
 from . import config, plugins, spotter, stt, tts, vad
@@ -342,8 +343,20 @@ async def update_mwi(req_id, new, old):
         log.warning("mwi: couldn't report %s: %s", status, e)
 
 
+# Which phone each call to the bridge's ports came from: the dialplan sends a TokenRingCall user
+# event (UUID, Endpoint) just before it connects the call. {AudioSocket UUID: (endpoint, time)}
+CALLERS = {}
+CALLERS_KEEP_S = 60
+
+
+def phone_endpoint():
+    """The user's phone ([bridge] phone, e.g. PJSIP/100 -> "100"): its mailbox is the user's."""
+    return bridge_conf()["phone"].partition("/")[2]
+
+
 async def text_replies_loop():
-    """Pass the user's texts to the PBX on to the gateway, for as long as the bridge runs."""
+    """Pass the user's texts to the PBX on to the gateway, and note which phone each call comes
+    from (TokenRingCall), for as long as the bridge runs."""
     warned = False
     while True:
         try:
@@ -352,7 +365,12 @@ async def text_replies_loop():
             warned = False
             while True:
                 ev = await ami_read(reader)
-                if ev.get("Event") == "UserEvent" and ev.get("UserEvent") == "TokenRingText":
+                if ev.get("Event") == "UserEvent" and ev.get("UserEvent") == "TokenRingCall":
+                    now = time.monotonic()
+                    for k in [k for k, (_, t) in CALLERS.items() if now - t > CALLERS_KEEP_S]:
+                        del CALLERS[k]
+                    CALLERS[ev.get("UUID", "").lower()] = (ev.get("Endpoint", ""), now)
+                elif ev.get("Event") == "UserEvent" and ev.get("UserEvent") == "TokenRingText":
                     body = base64.b64decode(ev.get("Body", "")).decode(errors="replace")
                     log.info("text from %s to %s: %r", ev.get("From"), ev.get("To"), body[:80])
                     await asyncio.get_running_loop().run_in_executor(
@@ -765,6 +783,24 @@ class Operator(Call):
             log.warning("%s gateway %s %s failed: %s", self.uuid, method, path, e)
             return None, {}
 
+    async def calling_endpoint(self, wait=2.0):
+        """The phone this call came from (the dialplan's TokenRingCall event), or None if it
+        didn't say."""
+        deadline = time.monotonic() + wait
+        while True:
+            hit = CALLERS.get(getattr(self, "call_uuid", "").lower())
+            if hit or time.monotonic() > deadline:
+                return hit[0] if hit else None
+            await asyncio.sleep(0.05)
+
+    async def mailbox_query(self, wait=2.0):
+        """The query that picks this caller's voicemail: "" for the user's phone, ?mailbox=<ext>
+        for another phone, None if the phone is unknown (then there's no voicemail for it)."""
+        endpoint = await self.calling_endpoint(wait)
+        if not endpoint:
+            return None
+        return "" if endpoint == phone_endpoint() else "?mailbox=" + urllib.parse.quote(endpoint)
+
     async def refresh(self):
         code, sessions = await self.api("GET", "/sessions")
         if code == 200:
@@ -871,7 +907,8 @@ class Operator(Call):
             return
         self.start_agent("operator", "operator", "operator")
         self.key = "operator"
-        code, body = await self.api("GET", "/voicemail")
+        box = await self.mailbox_query(wait=1.0)
+        code, body = await self.api("GET", "/voicemail" + box) if box is not None else (None, {})
         new = body.get("new", 0) if code == 200 else 0
         ext = " ".join(str(bridge_conf().get("voicemail_extension", "")))
         dial = f": dial {ext} to hear them" if ext.strip() else ""
@@ -1160,10 +1197,17 @@ class Voicemail(Operator):
         self.pending = 0    # utterances still being transcribed
         self.last_speech = 0.0
         self.watch = None
+        self.box = None     # the caller's mailbox query (mailbox_query)
 
     async def on_start(self):
         await self.refresh()
-        code, body = await self.api("GET", "/voicemail")
+        # Each phone hears only its own mailbox: a call that can't be tied to a phone gets none
+        self.box = await self.mailbox_query()
+        if self.box is None:
+            log.warning("%s voicemail: no phone for this call; not playing anything", self.uuid)
+            self.say("Sorry, voicemail isn't available right now.", "vm")
+            return
+        code, body = await self.api("GET", "/voicemail" + self.box)
         if code != 200:
             self.say("Sorry, voicemail isn't available right now.", "vm")
             return
@@ -1187,7 +1231,7 @@ class Voicemail(Operator):
         self.say(self.AFTER, "vm")
         if not m["heard"]:
             m["heard"] = True
-            asyncio.create_task(self.api("POST", f"/voicemail/{m['id']}/heard"))
+            asyncio.create_task(self.api("POST", f"/voicemail/{m['id']}/heard{self.box}"))
 
     def next_message(self):
         self.index += 1
@@ -1294,7 +1338,7 @@ class Voicemail(Operator):
             elif digit == "2":
                 self.next_message()
             elif digit == "3":
-                await self.api("POST", f"/voicemail/{m['id']}/delete")
+                await self.api("POST", f"/voicemail/{m['id']}/delete{self.box}")
                 del self.messages[self.index]
                 self.say("Deleted.", "vm")
                 self.index -= 1
