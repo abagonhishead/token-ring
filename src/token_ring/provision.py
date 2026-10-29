@@ -124,14 +124,17 @@ def linphone_xml(ext, password, c, voicemail=""):
 
 def contact_directories():
     """Linphone's settings for the address books ([contacts]: contacts.py): each is a CardDAV
-    directory it searches as you type, read with the phones' shared read-only login."""
+    directory it searches as you type, read with the phones' shared read-only login. (liblinphone
+    reads these from [carddav_N] server_url, whatever its provisioning docs say about
+    [remote_contact_directory_N]. Address books it keeps a full copy of are in its database, so
+    provisioning can't add those: the Contacts tab has what to type in.)"""
     from . import contacts
     c = contacts.conf()
     secret = contacts.password(c["reader"]) if contacts.enabled() else ""
     if not secret:
         return {}
-    out = {f"remote_contact_directory_{i}": {"enabled": 1, "type": "carddav", "uri": contacts.book_url(book),
-                                             "min_characters": 1, "results_limit": 0}
+    out = {f"carddav_{i}": {"enabled": 1, "server_url": contacts.book_url(book), "min_characters": 1,
+                            "results_limit": 0}
            for i, book in enumerate(contacts.BOOKS)}
     host = urllib.parse.urlsplit(c["url"]).hostname
     out["auth_info_1"] = {"username": c["reader"], "userid": c["reader"], "passwd": secret,

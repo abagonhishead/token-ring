@@ -97,5 +97,5 @@ def test_contacts_and_directory(server):
 def test_provisioning_has_the_address_books(server):
     from token_ring import provision
     xml = provision.linphone_xml("100", "pw", {"name": "pbx.example.com", "transport": "tls", "sip_port": 5061})
-    assert '<section name="remote_contact_directory_0">' in xml and f"{server}/token-ring/contacts/" in xml
+    assert '<section name="carddav_0">' in xml and f'"server_url" overwrite="true">{server}/token-ring/contacts/' in xml
     assert f"{server}/token-ring/directory/" in xml and '<entry name="passwd" overwrite="true">readpw</entry>' in xml

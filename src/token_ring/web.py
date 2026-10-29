@@ -830,7 +830,8 @@ def contacts_view():
     return {"enabled": True, "people": contacts.people(),
             "directory": sorted((contacts.parse(t) for t in contacts.cards("directory").values()),
                                 key=lambda x: x["sips"][0] if x["sips"] else ""),
-            "urls": {b: contacts.book_url(b) for b in contacts.BOOKS}, "reader": c["reader"]}
+            "urls": {b: contacts.book_url(b) for b in contacts.BOOKS}, "reader": c["reader"],
+            "reader_password": contacts.password(c["reader"]), "realm": "token-ring contacts"}
 
 
 # The server
