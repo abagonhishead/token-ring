@@ -825,12 +825,10 @@ def contacts_host():
 def contacts_view():
     if not contacts.enabled():
         return {"enabled": False}
-    contacts.ensure_books()
+    contacts.ensure_book()
     c = contacts.conf()
-    return {"enabled": True, "people": contacts.people(),
-            "directory": sorted((contacts.parse(t) for t in contacts.cards("directory").values()),
-                                key=lambda x: x["sips"][0] if x["sips"] else ""),
-            "urls": {b: contacts.book_url(b) for b in contacts.BOOKS}, "reader": c["reader"],
+    people, directory = contacts.split()
+    return {"enabled": True, "people": people, "directory": directory, "url": contacts.book_url(), "reader": c["reader"],
             "reader_password": contacts.password(c["reader"]), "realm": "token-ring contacts"}
 
 
@@ -984,7 +982,9 @@ class Handler(BaseHTTPRequestHandler):
                 uid = str(self.body().get("uid", ""))
                 if not re.fullmatch(r"[\w.@-]{1,100}", uid):
                     return self.reply(400, {"error": "uid required"})
-                contacts.delete("contacts", uid)
+                if uid.startswith(contacts.DIRECTORY):
+                    return self.reply(400, {"error": "the directory is kept by the PBX"})
+                contacts.delete(uid)
                 return self.reply(200, contacts_view())
             if path == "/api/contacts/import-callers":
                 have = {re.sub(r"\D", "", t) for p in contacts.people() for t in p["tels"]}

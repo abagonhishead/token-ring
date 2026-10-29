@@ -1,9 +1,11 @@
 """Contacts: address books for the phones, on a CardDAV server (docker/contacts: Radicale).
 
-The web page keeps two, as [contacts] owner: "contacts" (people, edited on its Contacts tab or
-with any CardDAV app) and "directory" (the PBX's own numbers: the phones, the operator and
-voicemail, and each session's direct line, rewritten as they change). Phones read both with one
-read-only login, [contacts] reader, which provisioning sets up in Linphone. The passwords are in
+One address book, "pbx", in the home of the phones' read-only login ([contacts] reader): CardDAV
+apps (Linphone among them) look in the login's home and take the first address book there. The
+web page keeps it as [contacts] owner: people (edited on its Contacts tab, or with any CardDAV
+app as the owner), and the PBX directory (uids pbx-<extension>: the phones, the operator and
+voicemail, and each session's direct line, rewritten as they change). Provisioning sets Linphone
+up to search it; the Contacts tab has what to type in for a synced copy. The passwords are in
 [contacts] users_file, one "user:password" line each (Radicale's htpasswd, plain).
 
 [contacts]
@@ -30,7 +32,8 @@ from . import config
 
 log = logging.getLogger("token-ring")
 
-BOOKS = {"contacts": "Contacts", "directory": "PBX directory"}
+BOOK, BOOK_NAME = "pbx", "PBX contacts"
+DIRECTORY = "pbx-"   # the directory's uids
 
 
 def conf():
@@ -53,8 +56,12 @@ def password(user):
     return ""
 
 
-def book_url(book, base=None):
-    return f"{(base or conf()['url']).rstrip('/')}/{conf()['owner']}/{book}/"
+def book_path():
+    return f"/{conf()['reader']}/{BOOK}/"
+
+
+def book_url():
+    return conf()["url"].rstrip("/") + book_path()
 
 
 # CardDAV, as the owner
@@ -83,24 +90,24 @@ MKCOL = """<?xml version="1.0" encoding="utf-8"?>
 </prop></set></mkcol>"""
 
 
-def ensure_books():
-    """Make the address books if they aren't there yet."""
-    owner = conf()["owner"]
-    request("PROPFIND", f"/{owner}/", headers={"Depth": "0"})   # (makes the owner's principal)
-    for book, name in BOOKS.items():
-        code, _ = request("PROPFIND", f"/{owner}/{book}/", headers={"Depth": "0"})
-        if code == 404:
-            code, body = request("MKCOL", f"/{owner}/{book}/", MKCOL.format(name=name),
-                                 {"Content-Type": "application/xml"})
-            if code not in (200, 201):
-                raise OSError(f"can't make the {book} address book: {code} {body[:200]!r}")
+def ensure_book():
+    """Make the address book (and the phones' home it's in) if it isn't there yet."""
+    home = f"/{conf()['reader']}/"
+    if request("PROPFIND", home, headers={"Depth": "0"})[0] == 404:
+        code, body = request("MKCOL", home)
+        if code not in (200, 201):
+            raise OSError(f"can't make {home}: {code} {body[:200]!r}")
+    if request("PROPFIND", book_path(), headers={"Depth": "0"})[0] == 404:
+        code, body = request("MKCOL", book_path(), MKCOL.format(name=BOOK_NAME), {"Content-Type": "application/xml"})
+        if code not in (200, 201):
+            raise OSError(f"can't make the address book: {code} {body[:200]!r}")
 
 
-def cards(book):
-    """{uid: vCard text} in an address book."""
-    code, body = request("GET", f"/{conf()['owner']}/{book}/")
+def cards():
+    """{uid: vCard text} in the address book."""
+    code, body = request("GET", book_path())
     if code != 200:
-        raise OSError(f"can't read the {book} address book: {code}")
+        raise OSError(f"can't read the address book: {code}")
     out = {}
     for text in re.findall(r"BEGIN:VCARD\r?\n.*?END:VCARD", body.decode("utf-8", "replace"), re.S):
         uid = parse(text).get("uid")
@@ -109,15 +116,15 @@ def cards(book):
     return out
 
 
-def put(book, uid, text):
-    code, body = request("PUT", f"/{conf()['owner']}/{book}/{urllib.parse.quote(uid)}.vcf", text,
+def put(uid, text):
+    code, body = request("PUT", f"{book_path()}{urllib.parse.quote(uid)}.vcf", text,
                          {"Content-Type": "text/vcard; charset=utf-8"})
     if code not in (200, 201, 204):
         raise OSError(f"can't save the contact: {code} {body[:200]!r}")
 
 
-def delete(book, uid):
-    code, _ = request("DELETE", f"/{conf()['owner']}/{book}/{urllib.parse.quote(uid)}.vcf")
+def delete(uid):
+    code, _ = request("DELETE", f"{book_path()}{urllib.parse.quote(uid)}.vcf")
     if code not in (200, 204, 404):
         raise OSError(f"can't delete the contact: {code}")
 
@@ -164,9 +171,17 @@ def parse(text):
     return out
 
 
+def split(all_cards=None):
+    """(people, directory): the address book's cards as dicts, people by name, the directory by
+    extension."""
+    parsed = [parse(t) for t in (cards() if all_cards is None else all_cards).values()]
+    people = sorted((c for c in parsed if not c["uid"].startswith(DIRECTORY)), key=lambda c: c["name"].lower())
+    directory = sorted((c for c in parsed if c["uid"].startswith(DIRECTORY)), key=lambda c: c["uid"])
+    return people, directory
+
+
 def people():
-    """The contacts book, as dicts, by name."""
-    return sorted((parse(t) for t in cards("contacts").values()), key=lambda c: c["name"].lower())
+    return split()[0]
 
 
 def save(contact):
@@ -179,9 +194,9 @@ def save(contact):
     if not tels and not sips:
         raise ValueError("a contact needs a number or a SIP address")
     uid = contact.get("uid") or str(uuid.uuid4())
-    if not re.fullmatch(r"[\w.@-]{1,100}", uid):
+    if not re.fullmatch(r"[\w.@-]{1,100}", uid) or uid.startswith(DIRECTORY):
         raise ValueError("that isn't a contact's id")
-    put("contacts", uid, card(name, tels, sips, str(contact.get("note", "")), uid))
+    put(uid, card(name, tels, sips, str(contact.get("note", "")), uid))
     return uid
 
 
@@ -194,21 +209,22 @@ def directory(endpoints, sessions, host):
     entries += [(ext, name, "service") for ext, name in conf().get("directory", {}).items()]
     entries += [(s["line"], f"{s['label'][:1].upper()}{s['label'][1:]} session", f"session {s['key']}")
                 for s in sessions if s.get("line")]
-    return {f"pbx-{ext}": card(name, sips=[f"sip:{ext}@{host}"], note=f"Extension {ext} ({what})", uid=f"pbx-{ext}")
+    return {f"{DIRECTORY}{ext}": card(name, sips=[f"sip:{ext}@{host}"], note=f"Extension {ext} ({what})",
+                                      uid=f"{DIRECTORY}{ext}")
             for ext, name, what in entries}
 
 
 def sync_directory(endpoints, sessions, host):
-    """Rewrite the directory book to match; returns how many cards changed."""
+    """Rewrite the directory's cards to match; returns how many changed."""
     want = directory(endpoints, sessions, host)
-    have = cards("directory")
+    have = {uid: t for uid, t in cards().items() if uid.startswith(DIRECTORY)}
     changed = 0
     for uid, text in want.items():
         if uid not in have or parse(have[uid]) != parse(text):
-            put("directory", uid, text)
+            put(uid, text)
             changed += 1
     for uid in set(have) - set(want):
-        delete("directory", uid)
+        delete(uid)
         changed += 1
     return changed
 
@@ -220,7 +236,7 @@ def directory_loop(endpoints_and_sessions, host, every_s=60):
     while True:
         try:
             if not ready:
-                ensure_books()
+                ensure_book()
                 ready = True
             endpoints, sessions = endpoints_and_sessions()
             if endpoints or sessions:

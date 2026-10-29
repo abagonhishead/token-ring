@@ -1,7 +1,7 @@
 # Contacts: a CardDAV server (Radicale, https://radicale.org, GPL-3.0) for the phones' address
-# books. The web page keeps two in it, as the user "token-ring": contacts (yours, edited on the
-# Contacts tab or with any CardDAV app) and directory (the extensions and session lines, kept up
-# to date by the page). Phones read both with one read-only login, "phones". Both passwords are
+# book. The web page keeps it, as the user "token-ring", in the home of the phones' read-only
+# login, "phones" (where CardDAV apps look): your contacts (the Contacts tab) and the PBX
+# directory (the extensions and session lines, kept up to date by the page). Both passwords are
 # in the contacts_users secret, one "user:password" line each (compose.yaml says how to make it).
 # HTTPS with /tls/fullchain.pem and privkey.pem when they're there, on port 5232.
 FROM python:3.13-slim-trixie

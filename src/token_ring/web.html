@@ -894,7 +894,7 @@ function renderVoices() {
     const rate = c.rates[s] ?? "";
     return `<tr class="${on ? "" : "off"}">
       <td><button class="play" data-play="${esc(s)}" title="Play" aria-label="Play ${esc(vzLabel(s))}">▶</button></td>
-      <td><input type="text" class="vname" data-name="${esc(s)}" value="${esc(c.names[s] || "")}" placeholder="${esc(v?.speaker || "")}"${dis}></td>
+      <td><input type="text" class="vname" data-name="${esc(s)}" value="${esc(c.names[s] || "")}" placeholder="${esc(/\d/.test(v?.speaker || "") ? "" : v?.speaker || "")}"${dis}></td>
       <td><input type="checkbox" data-greet="${esc(s)}" title="Says its name when it starts speaking"${c.introduce.includes(s) ? " checked" : ""}${edit && c.names[s] ? "" : " disabled"}></td>
       <td><span class="mono">${esc(s)}</span><br>${v ? [v.language, v.quality].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("") : '<span class="tag bad">not offered by its engine</span>'}${vz.heard?.[s] ? `<span class="tag" title="its measured pitch">sounds ${esc(vz.heard[s].sounds)}, ${vz.heard[s].pitch_hz} Hz</span>` : ""}</td>
       <td><input type="number" class="vrate" data-rate="${esc(s)}" min="0.3" max="3" step="0.01" value="${esc(rate)}" placeholder="${esc(c.rates[vzModel(s)] ?? c.rate)}"${dis}></td>
@@ -1029,9 +1029,9 @@ function renderContacts() {
   }
   document.querySelectorAll("#contacts .card:not(.note)").forEach(c => c.hidden = false);
   $("#ct-note").innerHTML = ct.error ? `<span class="err">Can't reach the contacts server: ${esc(ct.error)}</span>` :
-    `Phones read these address books with one read-only login. Provisioning sets Linphone up to search them as you type;
-     to keep a full copy, add each in Linphone's contacts settings (Add CardDAV address book) or any CardDAV app with:
-     <table style="margin-top:6px;width:auto"><tr><td class="muted">Server URL</td><td class="mono">${Object.values(ct.urls || {}).map(esc).join("<br>")}</td></tr>
+    `Phones read this address book (your contacts and the PBX directory) with one read-only login. Provisioning sets Linphone up to search it as you type;
+     to keep a full copy, add it in Linphone's contacts settings (Add CardDAV address book) or any CardDAV app with:
+     <table style="margin-top:6px;width:auto"><tr><td class="muted">Server URL</td><td class="mono">${esc(ct.url)}</td></tr>
      <tr><td class="muted">Username</td><td class="mono">${esc(ct.reader)}</td></tr>
      <tr><td class="muted">Password</td><td><span class="mono" id="ct-pw">••••••</span> <button class="btn" id="ct-pwshow" type="button">Show</button></td></tr>
      <tr><td class="muted">Auth realm</td><td class="mono">${esc(ct.realm)}</td></tr>
