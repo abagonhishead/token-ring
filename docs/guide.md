@@ -167,6 +167,13 @@ certificate in `./tls`, otherwise plain HTTP):
   plays each voice without a name and suggests a man's or woman's name by how low it sounds. Saving rewrites the
   `[voices]` tables in `config.toml` (keeping the previous file), and new calls use it.
 - **Session lines:** each session's direct line (3xx).
+- **Contacts:** the phones' address books, on a CardDAV server (`docker compose --profile
+  contacts up -d`, with `[contacts] url` set): your contacts, which you edit here (or in any
+  CardDAV app; **Add allowed callers** makes one for each allowed caller), and the PBX directory:
+  the phones, the operator, voicemail and each session's line, kept up to date by the page.
+  Phones read both with one read-only login, and provisioning sets Linphone up to search them as
+  you type. To have Linphone keep a full copy instead, add them in its contacts settings as
+  CardDAV address books, with the addresses and the `phones` login from the Contacts tab.
 - **Configuration:** Asterisk's files and token-ring's config, passwords hidden. Switch on
   **Advanced** to edit them: saving keeps the previous version and reloads what changed, and shows
   what Asterisk logged about it.

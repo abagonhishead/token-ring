@@ -9,9 +9,10 @@ Opening the link on the phone shows a button that hands the settings to Linphone
 them and forgets the address (or paste the address into Linphone's remote provisioning setting).
 The settings are the account (registrar [provision] name, its new password, a display name
 from [provision.names], the voicemail button dialling [bridge] voicemail_extension, the
-voicemail light, push notifications off and the app kept running so it stays registered) and,
-with TLS, mandatory SRTP. The address works once, and for [provision] wait_minutes at most; the old
-password stops working straight away, so run it again if the phone didn't fetch it.
+voicemail light, push notifications off and the app kept running so it stays registered), the
+address books ([contacts], with the phones' read-only login) and, with TLS, mandatory SRTP. The
+address works once, and for [provision] wait_minutes at most; the old password stops working
+straight away, so run it again if the phone didn't fetch it.
 
 It writes the password into [provision] auth_file (the pjsip.conf include with the extensions'
 passwords), so it needs write access to that, the certificate for [provision] name, and the
@@ -26,6 +27,7 @@ import secrets
 import ssl
 import sys
 import threading
+import urllib.parse
 from xml.sax.saxutils import escape
 
 from . import bridge, config
@@ -108,6 +110,7 @@ def linphone_xml(ext, password, c, voicemail=""):
         "auth_info_0": {"username": ext, "userid": ext, "passwd": password, "domain": host},
         "misc": {"transient_provisioning": 1},  # apply once, then forget the address
     }
+    sections.update(contact_directories())
     if c.get("media_encryption"):
         sections["sip"] = {"media_encryption": c["media_encryption"],
                            "media_encryption_mandatory": int(bool(c.get("media_encryption_mandatory", True)))}
@@ -117,6 +120,23 @@ def linphone_xml(ext, password, c, voicemail=""):
         + "  </section>\n" for name, entries in sections.items())
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<config xmlns="http://www.linphone.org/xsds/lpconfig.xsd">\n' + body + "</config>\n")
+
+
+def contact_directories():
+    """Linphone's settings for the address books ([contacts]: contacts.py): each is a CardDAV
+    directory it searches as you type, read with the phones' shared read-only login."""
+    from . import contacts
+    c = contacts.conf()
+    secret = contacts.password(c["reader"]) if contacts.enabled() else ""
+    if not secret:
+        return {}
+    out = {f"remote_contact_directory_{i}": {"enabled": 1, "type": "carddav", "uri": contacts.book_url(book),
+                                             "min_characters": 1, "results_limit": 0}
+           for i, book in enumerate(contacts.BOOKS)}
+    host = urllib.parse.urlsplit(c["url"]).hostname
+    out["auth_info_1"] = {"username": c["reader"], "userid": c["reader"], "passwd": secret,
+                          "realm": "token-ring contacts", "domain": host}
+    return out
 
 
 def serve(ext, xml, token, base, host, port, context=None, wait_s=600):

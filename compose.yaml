@@ -5,12 +5,15 @@
 #   mkdir -p secrets && openssl rand -hex 32 > secrets/token
 #   write secrets/pjsip_auth.conf (see asterisk/pjsip.conf), secrets/manager_auth.conf (see
 #   asterisk/manager.conf) and config.toml (from config.example.toml)
+#   for contacts: printf 'token-ring:%s\nphones:%s\n' $(openssl rand -hex 16) $(openssl rand -hex 16) > secrets/contacts_users
 #   the containers run as uid and gid 1000: chown 1000:1000 secrets/* && chmod 640 secrets/*
 #
 #   docker compose up -d                          Asterisk, the bridge and Piper
 #   docker compose --profile stt up -d            ... plus speaches for speech-to-text
 #   docker compose --profile kokoro up -d         ... plus Kokoro text-to-speech
 #   docker compose --profile gateway up -d        ... plus the gateway, for an all-in-one machine
+#   docker compose --profile contacts up -d       ... plus the phones' address books (CardDAV;
+#                                                  set [contacts] url in config.toml)
 #
 # Speech-to-text isn't in the default set: point [stt] at a server you already have (OpenAI,
 # Groq, a GPU box), or add the stt profile.
@@ -63,6 +66,20 @@ services:
     secrets:
       - token
       - manager_auth.conf
+      - contacts_users
+
+  # The phones' address books (CardDAV on port 5232; docker/contacts): the web page keeps them
+  contacts:
+    profiles: [contacts]
+    image: token-ring-contacts
+    build: { <<: *build, dockerfile: docker/contacts/Dockerfile }
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - contacts:/var/lib/radicale
+      - ./tls:/tls:ro                          # HTTPS when fullchain.pem and privkey.pem are there
+    secrets:
+      - contacts_users
 
   piper:
     image: token-ring-piper
@@ -90,6 +107,7 @@ services:
       - ./tls:/tls:ro
     secrets:
       - manager_auth.conf
+      - contacts_users                         # the phones' login to the address books
 
   speaches:
     profiles: [stt]
@@ -141,6 +159,7 @@ volumes:
   logs:
   tr-logs:
   hf-cache:
+  contacts:
 
 secrets:
   token:
@@ -149,3 +168,5 @@ secrets:
     file: ./secrets/pjsip_auth.conf
   manager_auth.conf:
     file: ./secrets/manager_auth.conf
+  contacts_users:
+    file: ./secrets/contacts_users

@@ -16,7 +16,7 @@ dependencies = []
 # The bridge (beside Asterisk); the gateway and the token-ring command need nothing extra
 bridge = ["numpy", "soxr"]
 vosk = ["vosk"]
-test = ["pytest"]
+test = ["pytest", "radicale"]   # radicale: the contacts tests run a real server
 
 [project.scripts]
 token-ring = "token_ring.cli:main"

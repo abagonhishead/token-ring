@@ -1,0 +1,25 @@
+# Who may do what (Radicale's rights file: the first section that matches counts).
+# R/r: read collections/items, W/w: write them.
+
+# token-ring (the web page) keeps the address books
+[owner]
+user: token-ring
+collection: token-ring(/.*)?
+permissions: RrWw
+
+# The phones read them
+[phones]
+user: phones
+collection: token-ring(/.*)?
+permissions: Rr
+
+# Everyone signed in may look at the top level and their own principal (for discovery)
+[root]
+user: .+
+collection:
+permissions: R
+
+[principal]
+user: .+
+collection: {user}
+permissions: R

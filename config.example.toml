@@ -148,6 +148,19 @@ preview_chars = 160            # up to this much of it (0: all), then "Dial ... 
 # url = "https://ntfy.sh/your-secret-topic"   # or your own ntfy server
 # token_env = "NTFY_TOKEN"
 
+# The phones' address books (docker/contacts, src/token_ring/contacts.py): "contacts", edited on
+# the web page's Contacts tab or any CardDAV app, and "directory", the PBX's own numbers. Phones
+# read both with one read-only login, which provisioning sets up in Linphone.
+[contacts]
+url = ""                       # e.g. "https://pbx.example.com:5232" (as the phones reach it; "": none)
+local_url = "https://127.0.0.1:5232"        # as the web page reaches it
+users_file = "/run/secrets/contacts_users"  # "user:password" lines for owner and reader
+owner = "token-ring"           # the web page's login (docker/contacts/rights)
+reader = "phones"              # the phones' read-only login
+[contacts.directory]           # numbers listed beside the phones and the session lines
+"200" = "Operator"
+"201" = "Voicemail"
+
 # The web page (token-ring-web; the web service in compose.yaml). No login yet: LAN or VPN only.
 [web]
 port = 8443

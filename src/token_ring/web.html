@@ -161,6 +161,7 @@ input:disabled, select:disabled { opacity: .65; }
   <nav>
     <button data-tab="overview" class="on">Overview</button>
     <button data-tab="logs">Logs</button>
+    <button data-tab="contacts">Contacts</button>
     <button data-tab="voices">Voices</button>
     <button data-tab="config">Configuration</button>
   </nav>
@@ -209,6 +210,30 @@ input:disabled, select:disabled { opacity: .65; }
         <button class="btn" id="logclear">Clear</button>
       </div>
       <div id="loglines"></div>
+    </div>
+  </section>
+
+  <section id="contacts" hidden>
+    <div class="note card" id="ct-note" style="border-radius:10px"></div>
+    <div class="card"><h2>Contacts<span class="spacer"></span><span class="muted" id="ct-count" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+      <div class="toolbar">
+        <input type="search" id="ct-filter" placeholder="Filter contacts" size="22">
+        <span class="spacer"></span>
+        <button class="btn" id="ct-import" title="A contact for each allowed caller who hasn't got one">Add allowed callers</button>
+        <button class="btn primary" id="ct-new">New contact</button>
+      </div>
+      <form id="ct-form" class="body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px;border-bottom:1px solid var(--line)" hidden>
+        <input type="text" id="ct-name" placeholder="Name" required>
+        <input type="text" id="ct-tels" placeholder="Phone numbers (comma between)">
+        <input type="text" id="ct-sips" placeholder="SIP addresses (optional)">
+        <input type="text" id="ct-notes" placeholder="Note (optional)">
+        <span style="display:flex;gap:8px"><button class="btn primary" id="ct-save">Save</button><button class="btn" type="button" id="ct-cancel">Cancel</button></span>
+      </form>
+      <div class="body" style="overflow-x:auto"><table id="ct-people"></table></div>
+    </div>
+    <div class="card"><h2>PBX directory</h2>
+      <div class="note">The phones, the operator, voicemail and each session's direct line, kept up to date from the PBX.</div>
+      <div class="body" style="overflow-x:auto"><table id="ct-directory"></table></div>
     </div>
   </section>
 
@@ -303,7 +328,7 @@ async function api(path, opts = {}) {
 }
 
 // Tabs and the Advanced switch
-const TABS = ["overview", "logs", "voices", "config"];
+const TABS = ["overview", "logs", "contacts", "voices", "config"];
 let tab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : store.get("tab", "overview");
 function showTab(t) {
   tab = t; store.set("tab", t);
@@ -314,12 +339,13 @@ function showTab(t) {
   if (t === "config") { loadFiles(); if (cm) setTimeout(() => cm.refresh()); }
   if (t === "overview") loadCallers();
   if (t === "voices" && !(vz && vzChanged())) loadVoices();
+  if (t === "contacts") loadContacts();
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if (TABS.includes(t) && t !== tab) showTab(t); });
 const adv = $("#advanced");
 adv.checked = store.get("advanced", false);
-adv.onchange = () => { store.set("advanced", adv.checked); $("#callers-result").textContent = ""; renderCallers(); renderVoices(); if (current) openFile(current.kind, current.name, true); };
+adv.onchange = () => { store.set("advanced", adv.checked); $("#callers-result").textContent = ""; renderCallers(); renderVoices(); renderContacts(); if (current) openFile(current.kind, current.name, true); };
 
 // Overview
 let status = null;
@@ -985,6 +1011,74 @@ $("#vz-save").onclick = async () => {
   btn.disabled = false;
 };
 window.addEventListener("beforeunload", e => { if (vz && vzChanged()) e.preventDefault(); });
+
+// Contacts (contacts.py): the address books on the CardDAV server, which the phones read
+let ct = null, ctEditing = null;
+async function loadContacts() {
+  try { ct = await api("/api/contacts"); } catch (e) { ct = {enabled: true, error: e.message}; }
+  renderContacts();
+}
+const ctDial = t => t.replace(/^\+44/, "0");
+function renderContacts() {
+  if (!ct) return;
+  const edit = adv.checked;
+  if (!ct.enabled) {
+    $("#ct-note").innerHTML = 'No contacts server: set [contacts] url in config.toml and start the contacts service (see compose.yaml).';
+    document.querySelectorAll("#contacts .card:not(.note)").forEach(c => c.hidden = true);
+    return;
+  }
+  document.querySelectorAll("#contacts .card:not(.note)").forEach(c => c.hidden = false);
+  $("#ct-note").innerHTML = ct.error ? `<span class="err">Can't reach the contacts server: ${esc(ct.error)}</span>` :
+    `Phones read these address books with the login <span class="mono">${esc(ct.reader)}</span> (provisioning sets Linphone up), as can any CardDAV app:
+     ${Object.values(ct.urls || {}).map(u => `<span class="mono">${esc(u)}</span>`).join(" and ")}.` +
+    (edit ? "" : ' <span class="muted">Switch on Advanced to change contacts.</span>');
+  if (ct.error) return;
+  $("#ct-import").hidden = $("#ct-new").hidden = !edit;
+  if (!edit) $("#ct-form").hidden = true;
+  const q = $("#ct-filter").value.trim().toLowerCase();
+  const people = ct.people.filter(p => !q || [p.name, ...p.tels, ...p.sips, p.note].join(" ").toLowerCase().includes(q));
+  $("#ct-count").textContent = `${ct.people.length} contact${ct.people.length === 1 ? "" : "s"}`;
+  $("#ct-people").innerHTML = people.length ? "<tr><th>Name</th><th>Numbers</th><th>SIP</th><th>Note</th><th></th></tr>" + people.map(p =>
+    `<tr><td>${esc(p.name)}</td><td class="mono">${p.tels.map(t => esc(ctDial(t))).join("<br>")}</td>
+     <td class="mono">${p.sips.map(s => esc(s.replace(/^sip:/, ""))).join("<br>")}</td><td class="muted">${esc(p.note)}</td>
+     <td style="text-align:right;white-space:nowrap">${edit ? `<button class="btn" data-ctedit="${esc(p.uid)}">Edit</button> <button class="btn danger" data-ctdel="${esc(p.uid)}">Delete</button>` : ""}</td></tr>`).join("")
+    : `<tr><td class="muted">${ct.people.length ? "No contacts match." : "No contacts yet."}</td></tr>`;
+  $("#ct-directory").innerHTML = ct.directory.length ? "<tr><th>Name</th><th>Dial</th><th>What</th></tr>" + ct.directory.map(d =>
+    `<tr><td>${esc(d.name)}</td><td class="mono">${esc((d.sips[0] || "").replace(/^sip:/, "").split("@")[0])}</td><td class="muted">${esc(d.note.replace(/^Extension \d+ \((.*)\)$/, "$1"))}</td></tr>`).join("")
+    : '<tr><td class="muted">Not filled in yet: the web page does it within a minute of starting.</td></tr>';
+}
+function ctOpen(p) {
+  ctEditing = p ? p.uid : null;
+  $("#ct-name").value = p ? p.name : ""; $("#ct-tels").value = p ? p.tels.map(ctDial).join(", ") : "";
+  $("#ct-sips").value = p ? p.sips.map(s => s.replace(/^sip:/, "")).join(", ") : ""; $("#ct-notes").value = p ? p.note : "";
+  $("#ct-form").hidden = false; $("#ct-name").focus();
+}
+$("#ct-new").onclick = () => ctOpen(null);
+$("#ct-cancel").onclick = () => { $("#ct-form").hidden = true; ctEditing = null; };
+$("#ct-filter").oninput = renderContacts;
+$("#ct-form").onsubmit = async e => {
+  e.preventDefault();
+  const list = id => $(id).value.split(",").map(x => x.trim()).filter(Boolean);
+  const contact = {uid: ctEditing, name: $("#ct-name").value, tels: list("#ct-tels"), sips: list("#ct-sips"), note: $("#ct-notes").value.trim()};
+  $("#ct-save").disabled = true;
+  try { ct = await api("/api/contacts", {method: "PUT", body: JSON.stringify({contact})}); $("#ct-form").hidden = true; ctEditing = null; renderContacts(); }
+  catch (err) { alert(`Not saved: ${err.message}`); }
+  $("#ct-save").disabled = false;
+};
+$("#ct-people").addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const p = ct.people.find(p => p.uid === (b.dataset.ctedit || b.dataset.ctdel));
+  if (b.dataset.ctedit) ctOpen(p);
+  else if (b.dataset.ctdel && confirm(`Delete ${p.name}?`)) {
+    try { ct = await api("/api/contacts/delete", {method: "POST", body: JSON.stringify({uid: p.uid})}); renderContacts(); }
+    catch (err) { alert(`Not deleted: ${err.message}`); }
+  }
+});
+$("#ct-import").onclick = async () => {
+  try { const r = await api("/api/contacts/import-callers", {method: "POST"}); ct = r; renderContacts();
+        alert(r.added ? `Added ${r.added} contact${r.added === 1 ? "" : "s"}.` : "Every allowed caller already has a contact."); }
+  catch (err) { alert(err.message); }
+};
 
 showTab(tab);
 refresh();

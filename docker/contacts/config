@@ -1,0 +1,22 @@
+# Radicale for token-ring's contacts (docker/contacts/Dockerfile)
+[server]
+hosts = 0.0.0.0:5232, [::]:5232
+
+[auth]
+type = htpasswd
+htpasswd_filename = /run/secrets/contacts_users
+htpasswd_encryption = plain
+realm = token-ring contacts
+
+[rights]
+type = from_file
+file = /etc/radicale/rights
+
+[storage]
+filesystem_folder = /var/lib/radicale/collections
+
+[web]
+type = none
+
+[logging]
+level = warning

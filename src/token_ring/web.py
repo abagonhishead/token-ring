@@ -31,7 +31,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from . import bridge, config, tts
+from . import bridge, config, contacts, tts
 from .audio import pitch_hz, to_wav
 
 log = logging.getLogger("token-ring")
@@ -808,6 +808,31 @@ def suggest_names(voices, taken, rng=None):
     return out
 
 
+# Contacts (contacts.py): the address books the phones read
+
+def directory_source():
+    """(phones [(extension, name)], sessions) for the directory."""
+    st = ami(asterisk_status())
+    phones = [(ep["name"], (re.match(r'\s*"([^"]*)"', ep.get("callerid", "")) or [None, ""])[1])
+              for ep in st.get("endpoints", [])]
+    return phones, voice_sessions()
+
+
+def contacts_host():
+    return config.section("provision").get("name") or urllib.parse.urlsplit(contacts.conf()["url"]).hostname or ""
+
+
+def contacts_view():
+    if not contacts.enabled():
+        return {"enabled": False}
+    contacts.ensure_books()
+    c = contacts.conf()
+    return {"enabled": True, "people": contacts.people(),
+            "directory": sorted((contacts.parse(t) for t in contacts.cards("directory").values()),
+                                key=lambda x: x["sips"][0] if x["sips"] else ""),
+            "urls": {b: contacts.book_url(b) for b in contacts.BOOKS}, "reader": c["reader"]}
+
+
 # The server
 
 class Handler(BaseHTTPRequestHandler):
@@ -866,6 +891,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"calls": read_calls(min(int(q.get("limit", 100)), 1000))})
             if path == "/api/callers":
                 return self.reply(200, {**read_callers(), "country_code": ami(country_code())})
+            if path == "/api/contacts":
+                try:
+                    return self.reply(200, contacts_view())
+                except Exception as e:
+                    return self.reply(200, {"enabled": True, "error": str(e)})
             if path == "/api/voices":
                 voices, errors = tts.available()
                 return self.reply(200, {"config": read_voices(), "available": voices, "errors": errors,
@@ -902,6 +932,15 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def do_PUT(self):
+        if urllib.parse.urlsplit(self.path).path == "/api/contacts":
+            try:
+                uid = contacts.save(self.body().get("contact") or {})
+                return self.reply(200, {"uid": uid, **contacts_view()})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception as e:
+                log.warning("save contact: %s", e)
+                return self.reply(500, {"error": str(e)})
         if urllib.parse.urlsplit(self.path).path == "/api/voices":
             try:
                 return self.reply(200, {**write_voices(self.body().get("voices")), "config": read_voices()})
@@ -940,6 +979,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
         try:
+            if path == "/api/contacts/delete":
+                uid = str(self.body().get("uid", ""))
+                if not re.fullmatch(r"[\w.@-]{1,100}", uid):
+                    return self.reply(400, {"error": "uid required"})
+                contacts.delete("contacts", uid)
+                return self.reply(200, contacts_view())
+            if path == "/api/contacts/import-callers":
+                have = {re.sub(r"\D", "", t) for p in contacts.people() for t in p["tels"]}
+                added = 0
+                for c in read_callers()["callers"]:
+                    if re.sub(r"\D", "", c["number"]) not in have:
+                        contacts.save({"name": c["name"] or c["number"], "tels": [c["number"]]})
+                        added += 1
+                return self.reply(200, {"added": added, **contacts_view()})
             if path == "/api/voices/names":
                 b = self.body()
                 voices, taken = b.get("voices"), b.get("taken") or []
@@ -1040,6 +1093,8 @@ def main():
         server.context.load_cert_chain(cert, key)
         scheme = "https"
     threading.Thread(target=rotate_loop, daemon=True).start()
+    if contacts.enabled():
+        threading.Thread(target=contacts.directory_loop, args=(directory_source, contacts_host()), daemon=True).start()
     log.info("web page on %s://%s:%d (no login: keep it to your LAN or VPN)", scheme, c["listen"], c["port"])
     server.serve_forever()
 

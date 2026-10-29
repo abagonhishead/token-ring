@@ -84,6 +84,14 @@ DEFAULTS = {
         "bridge_log": "/var/log/token-ring/bridge.log",
         "rotate_mb": 5,
     },
+    "contacts": {
+        "url": "",                     # the CardDAV server as phones reach it ("": no contacts)
+        "local_url": "https://127.0.0.1:5232",
+        "users_file": "/run/secrets/contacts_users",
+        "owner": "token-ring",
+        "reader": "phones",
+        "directory": {"200": "Operator", "201": "Voicemail"},
+    },
     "provision": {
         "name": "",                    # the host name phones register to (in the certificate)
         "sip_port": 5061,
