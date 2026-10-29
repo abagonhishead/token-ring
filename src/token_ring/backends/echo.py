@@ -22,6 +22,7 @@ class EchoConversation(Conversation):
         if text.lower().rstrip(".!") in ("hang up", "goodbye"):
             self.events.put({"say": "Goodbye."})
             self.events.put({"hangup": True})
+            self.events.put({"say": "Bye for now."})  # as AIs do after hanging up: not to be said
         elif text.lower().startswith("connect me to ") and self.label == "operator":
             self.events.put({"connect": {"key": text[14:].strip(" .").lower()}})
         else:

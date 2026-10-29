@@ -767,6 +767,8 @@ class Operator(Call):
         self.pips = None
         self.spotter = None
         self.assistant = bridge_conf()["caller_id"]  # what the AI is called (the gateway says)
+        self.ending = False   # the AI has hung up: the call ends once its goodbye has been said
+        self.replied = False  # the AI has said something since the caller last spoke
 
     @property
     def target(self):
@@ -957,6 +959,7 @@ class Operator(Call):
             t["pending"] = []
         elif "hangup" in ev and current:
             log.info("%s %s hung up", self.uuid, key)
+            self.ending = True
             asyncio.create_task(self.hangup())  # after whatever is still being said
         elif "connect" in ev and current:
             c = ev["connect"]
@@ -976,8 +979,11 @@ class Operator(Call):
             return
         elif "say" in ev:
             text = speakable(ev["say"])
-            if text:
+            if text and self.ending and self.replied:  # a second goodbye, written after hanging up
+                log.info("%s after hanging up, not said: %s", self.uuid, text[:80])
+            elif text:
                 self.say(text, "reply", voice_for(key))
+                self.replied = True
         elif "dialog" in ev:
             self.on_dialog(ev["dialog"])
 
@@ -1049,6 +1055,7 @@ class Operator(Call):
             self.say("Sorry, I didn't catch that.", "unclear")
             return
         self.menu = None
+        self.replied = False
         if self.key != "operator":  # in a session, everything is for the session
             return await self.send_text(text)
         if LIST.match(text):

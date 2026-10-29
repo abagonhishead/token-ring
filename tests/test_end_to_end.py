@@ -194,6 +194,21 @@ def test_operator_connect_question_and_permission(system):
     asyncio.run(main())
 
 
+def test_operator_goodbye(system):
+    """The AI says goodbye and hangs up: the call ends after that goodbye, not a second one."""
+    ports, said, _ = system
+
+    async def main():
+        await serve(ports)
+        replies("Goodbye.")
+        async with Caller(ports["op"]) as c:
+            await until(said_has(said, "Operator"))
+            await c.speak()
+            await until(lambda: c.hung_up)
+        assert "Goodbye." in said and "Bye for now." not in said
+    asyncio.run(main())
+
+
 def test_voicemail_and_outbound(system):
     ports, said, tmp = system
     gw(ports, "POST", "/voicemail", {"key": "beta", "message": "The build passed."})
