@@ -297,3 +297,25 @@ def test_suggest_names(monkeypatch):
     assert got["piper/high"]["sounds"] == "female" and got["piper/high"]["name"] in web.FEMALE_NAMES
     names = [g["name"] for g in got.values()]
     assert len(set(names)) == 3 and "Oliver" not in names
+
+
+def test_port_voices(conf):
+    c = conf('''[bridge]
+operator_port = 1
+voicemail_port = 2
+echo_port = 3
+[bridge.apps.wake]
+port = 4
+voice = "piper/b"
+[voices]
+operator = "piper/a"
+default = "@team"
+disabled = ["piper/c"]
+[voices.groups]
+team = ["piper/a", "piper/b", "piper/c"]
+[voices.names]
+"piper/a" = "Ann"
+''')
+    got = web.port_voices(c)
+    assert got[1] == ["voice: Ann", "sessions: Ann or b"]
+    assert got[2] == got[3] == ["voice: Ann"] and got[4] == ["voice: b"]

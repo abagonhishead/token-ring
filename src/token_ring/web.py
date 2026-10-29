@@ -248,6 +248,41 @@ def reachable(url, timeout=1.5):
         return False
 
 
+def voice_label(want):
+    """How a [voices] entry reads: a voice's name, or a group's voices that are on."""
+    if not want.startswith("@"):
+        return voice_name(want)
+    members = [s for s in config.section("voices").get("groups", {}).get(want[1:], []) if tts.enabled(s)]
+    return either(members, want[1:]) if members else f"{want[1:]} (no voices on)"
+
+
+def voice_name(spec):
+    return config.section("voices").get("names", {}).get(spec) or spec.split("/", 1)[-1]
+
+
+def either(specs, what):
+    """"Poppy or Spike", "Ann, Bob or Cee", or "<what> (5 voices)"."""
+    names = [voice_name(s) for s in specs]
+    if len(names) > 3:
+        return f"{what} ({len(names)} voices)"
+    return " or ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else names[0]
+
+
+def port_voices(c):
+    """{bridge port: ["voice: ...", ...]}: who speaks on calls to it."""
+    v, b = c["voices"], c["bridge"]
+    operator = voice_label(v.get("operator") or tts.default_voice())
+    pool = [s for s in v.get("pool") or [] if tts.enabled(s)]
+    sessions = (voice_label(v["default"]) if v.get("default") else either(pool, "pool") if pool
+                else "the operator's")
+    out = {b["echo_port"]: [f"voice: {operator}"], b["voicemail_port"]: [f"voice: {operator}"],
+           b["operator_port"]: [f"voice: {operator}", f"sessions: {sessions}"]}
+    for app in b.get("apps", {}).values():
+        if app.get("port"):
+            out[app["port"]] = [f"voice: {voice_label(app['voice']) if app.get('voice') else operator}"]
+    return out
+
+
 def services():
     """The bridge's ports, the gateway, speech-to-text and text-to-speech."""
     c = config.get()
@@ -256,7 +291,8 @@ def services():
     ports = {"echo (601)": b["echo_port"], "operator (200)": b["operator_port"],
              "voicemail (201)": b["voicemail_port"],
              **{f"{name} app": app.get("port") for name, app in b.get("apps", {}).items()}}
-    out = {"bridge": [{"name": n, "port": p, "up": p in up} for n, p in ports.items() if p]}
+    voices = port_voices(c)
+    out = {"bridge": [{"name": n, "port": p, "up": p in up, "voices": voices.get(p, [])} for n, p in ports.items() if p]}
     gw = {"url": b["gateway_url"], "up": False, "detail": ""}
     try:
         code, body = bridge.gateway().call("GET", "/info")

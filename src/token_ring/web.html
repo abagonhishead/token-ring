@@ -397,13 +397,15 @@ function renderDiagram(st) {
   const middle = internal.length + incoming.length;
   incoming.forEach((e, i) => {
     const yy = y(internal.length + i, middle);
-    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`, [e.label, e.screened ? "allowed callers only" : ""]);
+    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`, [e.label, e.screened ? "allowed callers only" : ""].map(t => clip(t, 30)));
     edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
     if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
   });
   internal.forEach((e, i) => {
     const yy = y(i, middle);
-    nodes += node(X[2], yy, Wd[2], nodeH, `${e.exten.replace(/^_/, "")}  ${e.label}`, [e.only ? `only from ${e.only}` : ""]);
+    const voices = (ports.find(p => p.port === e.port) || {}).voices || [];
+    nodes += node(X[2], yy, Wd[2], nodeH, `${e.exten.replace(/^_/, "")}  ${e.label}`,
+                  [e.only ? `only from ${e.only}` : "", ...voices].filter(Boolean).slice(0, 2).map(t => clip(t, 30)));
     edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
     if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
   });
