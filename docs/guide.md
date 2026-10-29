@@ -171,9 +171,9 @@ certificate in `./tls`, otherwise plain HTTP):
   contacts up -d`, with `[contacts] url` set): your contacts, which you edit here (or in any
   CardDAV app; **Add allowed callers** makes one for each allowed caller), and the PBX directory:
   the phones, the operator, voicemail and each session's line, kept up to date by the page.
-  Phones read both with one read-only login, and provisioning sets Linphone up to search them as
-  you type. To have Linphone keep a full copy instead, add them in its contacts settings as
-  CardDAV address books, with the addresses and the `phones` login from the Contacts tab.
+  Phones read it with one read-only login, through a CardDAV sync app such as DAVx5 (the Contacts
+  tab has what to type in), which puts it in the phone's contacts, where Linphone looks. Linphone's
+  own CardDAV sync (6.2) signs in for the first request and gives up on the next, so it can't use it.
 - **Configuration:** Asterisk's files and token-ring's config, passwords hidden. Switch on
   **Advanced** to edit them: saving keeps the previous version and reloads what changed, and shows
   what Asterisk logged about it.

@@ -1029,13 +1029,13 @@ function renderContacts() {
   }
   document.querySelectorAll("#contacts .card:not(.note)").forEach(c => c.hidden = false);
   $("#ct-note").innerHTML = ct.error ? `<span class="err">Can't reach the contacts server: ${esc(ct.error)}</span>` :
-    `Phones read this address book (your contacts and the PBX directory) with one read-only login. Provisioning sets Linphone up to search it as you type;
-     to keep a full copy, add it in Linphone's contacts settings (Add CardDAV address book) or any CardDAV app with:
-     <table style="margin-top:6px;width:auto"><tr><td class="muted">Server URL</td><td class="mono">${esc(ct.url)}</td></tr>
+    `Phones read this address book (your contacts and the PBX directory) with one read-only login, through a CardDAV sync app such as
+     DAVx5, which puts it in the phone's contacts (where Linphone looks; Linphone's own CardDAV sync can't sign in). In DAVx5, add an
+     account with "URL and username":
+     <table style="margin-top:6px;width:auto"><tr><td class="muted">Base URL</td><td class="mono">${esc(ct.url)}</td></tr>
      <tr><td class="muted">Username</td><td class="mono">${esc(ct.reader)}</td></tr>
      <tr><td class="muted">Password</td><td><span class="mono" id="ct-pw">••••••</span> <button class="btn" id="ct-pwshow" type="button">Show</button></td></tr>
-     <tr><td class="muted">Auth realm</td><td class="mono">${esc(ct.realm)}</td></tr>
-     <tr><td class="muted">Store new contacts in it</td><td>off (it's read-only)</td></tr></table>` +
+     </table>` +
     (edit ? "" : ' <span class="muted">Switch on Advanced to change contacts.</span>');
   const show = $("#ct-pwshow");
   if (show) show.onclick = () => { const on = show.textContent === "Show"; $("#ct-pw").textContent = on ? ct.reader_password : "••••••"; show.textContent = on ? "Hide" : "Show"; };

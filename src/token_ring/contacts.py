@@ -4,8 +4,10 @@ One address book, "pbx", in the home of the phones' read-only login ([contacts] 
 apps (Linphone among them) look in the login's home and take the first address book there. The
 web page keeps it as [contacts] owner: people (edited on its Contacts tab, or with any CardDAV
 app as the owner), and the PBX directory (uids pbx-<extension>: the phones, the operator and
-voicemail, and each session's direct line, rewritten as they change). Provisioning sets Linphone
-up to search it; the Contacts tab has what to type in for a synced copy. The passwords are in
+voicemail, and each session's direct line, rewritten as they change). Phones get it with a
+CardDAV sync app such as DAVx5, which puts it in the phone's contacts (Linphone shows those):
+Linphone 6.2's own CardDAV sync signs in for a sync's first request and then gives up when the
+next one asks, so it can't use a book that needs a login. The passwords are in
 [contacts] users_file, one "user:password" line each (Radicale's htpasswd, plain).
 
 [contacts]
@@ -62,6 +64,11 @@ def book_path():
 
 def book_url():
     return conf()["url"].rstrip("/") + book_path()
+
+
+def server_url():
+    """Where CardDAV apps start: the server's root, which finds the phones' home and the book."""
+    return conf()["url"].rstrip("/") + "/"
 
 
 # CardDAV, as the owner

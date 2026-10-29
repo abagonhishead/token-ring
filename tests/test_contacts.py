@@ -109,9 +109,3 @@ def test_contacts_and_directory(server):
     listing = propfind(home, "<d:resourcetype/><d:displayname/>", depth="1")
     assert (principal, home) == ("/phones/", "/phones/") and "/phones/pbx/" in listing and "addressbook" in listing
 
-
-def test_provisioning_has_the_address_books(server):
-    from token_ring import provision
-    xml = provision.linphone_xml("100", "pw", {"name": "pbx.example.com", "transport": "tls", "sip_port": 5061})
-    assert '<section name="carddav_0">' in xml and f'"server_url" overwrite="true">{server}/phones/pbx/' in xml
-    assert '<entry name="passwd" overwrite="true">readpw</entry>' in xml

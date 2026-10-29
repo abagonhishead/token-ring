@@ -828,8 +828,8 @@ def contacts_view():
     contacts.ensure_book()
     c = contacts.conf()
     people, directory = contacts.split()
-    return {"enabled": True, "people": people, "directory": directory, "url": contacts.book_url(), "reader": c["reader"],
-            "reader_password": contacts.password(c["reader"]), "realm": "token-ring contacts"}
+    return {"enabled": True, "people": people, "directory": directory, "url": contacts.server_url(), "reader": c["reader"],
+            "reader_password": contacts.password(c["reader"])}
 
 
 # The server
