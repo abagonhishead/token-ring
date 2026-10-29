@@ -103,14 +103,21 @@ noise_w = 0.333
 # voice = "fable"
 # api_key_env = "OPENAI_API_KEY"
 
-# Who speaks in which voice.
+# Who speaks in which voice (the web page's Voices tab edits these tables). Each of operator,
+# default and [voices.sessions] is a voice, or "@<group>": a random one of the group's voices
+# each call, kept for the rest of it.
 [voices]
 operator = "piper/en_GB-alan-medium"       # the operator, and everything the PBX says
-pool = []                      # sessions get one of these, picked by hashing the session's key
-                               # (the same voice every call); empty: the operator's voice
+default = ""                   # sessions without their own voice ("": the pool below, else the operator's)
+pool = []                      # older: sessions get one of these by hashing the session's key (the
+                               # same voice every call); used when default is ""
 rate = 1.0                     # speaking rate: 1 is the voice's own pace, 1.2 is 20% faster
-[voices.sessions]              # voices pinned to sessions
+disabled = []                  # voices that are never used
+[voices.groups]
+# team = ["piper/en_GB-alan-medium", "piper/en_GB-semaine-medium:poppy"]
+[voices.sessions]              # voices for particular sessions
 # my-project = "piper/en_GB-semaine-medium:poppy"
+# other-project = "@team"
 [voices.names]                 # voices with these names introduce themselves ("Hi, it's Poppy.")
 # "piper/en_GB-semaine-medium:poppy" = "Poppy"
 [voices.rates]                 # per voice, or per model ("piper/en_GB-semaine-medium")

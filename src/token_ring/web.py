@@ -31,7 +31,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from . import bridge, config
+from . import bridge, config, tts
+from .audio import to_wav
 
 log = logging.getLogger("token-ring")
 
@@ -591,6 +592,141 @@ def reload_asterisk(name):
     return {"reload": f"{command}: {said.strip() or 'done'}", "warnings": lines[-30:]}
 
 
+# Voices ([voices] in config.toml): what each engine offers, and who speaks in which. The Voices
+# tab edits the [voices] tables, rewriting just them (their comments go; the rest of the file
+# is kept as it is).
+
+VOICE_KEYS = ("operator", "default", "rate", "disabled", "groups", "sessions", "names", "rates")
+GROUP_NAME = re.compile(r"[\w-]{1,40}")
+
+
+def read_voices():
+    """[voices], as the Voices tab edits it. The older pool (sessions hashed onto it) shows as a
+    group, "pool", that sessions use: saving makes that the default (a random one each call)."""
+    v = config.section("voices")
+    out = {"operator": v.get("operator", ""), "default": v.get("default", ""), "rate": v.get("rate", 1.0),
+           "disabled": list(v.get("disabled", [])), "groups": dict(v.get("groups", {})),
+           "sessions": dict(v.get("sessions", {})), "names": dict(v.get("names", {})),
+           "rates": dict(v.get("rates", {}))}
+    if v.get("pool") and not out["default"]:
+        out["groups"].setdefault("pool", list(v["pool"]))
+        out["default"] = "@pool"
+    return out
+
+
+def voice_sessions():
+    """The sessions the gateway knows ([{"key", "label"}]), for assigning voices; [] if it's down."""
+    try:
+        code, body = bridge.gateway().call("GET", "/sessions")
+        return [{"key": x["key"], "label": x.get("label", x["key"])} for x in body] if code == 200 else []
+    except Exception:
+        return []
+
+
+def toml_key(k):
+    return k if re.fullmatch(r"[A-Za-z0-9_-]+", k) else json.dumps(k, ensure_ascii=False)
+
+
+def toml_value(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    if len(v) > 2:
+        return "[\n" + "".join(f"  {toml_value(x)},\n" for x in v) + "]"
+    return "[" + ", ".join(toml_value(x) for x in v) + "]"
+
+
+def voices_toml(v):
+    out = ["[voices]", "# Edited on the web page's Voices tab (saving there rewrites these tables, and their comments)"]
+    out += [f"{k} = {toml_value(v[k])}" for k in ("operator", "default", "rate", "disabled")]
+    for table in ("groups", "sessions", "names", "rates"):
+        out.append(f"[voices.{table}]")
+        out += [f"{toml_key(k)} = {toml_value(x)}" for k, x in v[table].items()]
+    return "\n".join(out) + "\n"
+
+
+def check_voices(v):
+    """The Voices tab's settings, checked and tidied; raises ValueError."""
+    if not isinstance(v, dict):
+        raise ValueError("voices required")
+    v = {k: v.get(k) for k in VOICE_KEYS}
+    text = lambda x: isinstance(x, str) and "\n" not in x and len(x) <= 200
+    v["operator"], v["default"] = v["operator"] or "", v["default"] or ""
+    v["disabled"] = v["disabled"] or []
+    for k in ("groups", "sessions", "names", "rates"):
+        v[k] = v[k] or {}
+        if not isinstance(v[k], dict):
+            raise ValueError(f"{k} isn't a table")
+    try:
+        v["rate"] = float(v["rate"] if v["rate"] is not None else 1.0)
+        v["rates"] = {k: float(x) for k, x in v["rates"].items()}
+    except (TypeError, ValueError):
+        raise ValueError("speaking rates are numbers")
+    if not all(0.3 <= r <= 3 for r in [v["rate"], *v["rates"].values()]):
+        raise ValueError("speaking rates are between 0.3 and 3")
+    for name, members in v["groups"].items():
+        if not GROUP_NAME.fullmatch(name):
+            raise ValueError(f"group names are letters, digits, - and _: {name!r}")
+        if not isinstance(members, list) or not all(map(text, members)):
+            raise ValueError(f"group {name}: a list of voices")
+        v["groups"][name] = list(dict.fromkeys(members))
+    if not isinstance(v["disabled"], list) or not all(map(text, v["disabled"])):
+        raise ValueError("disabled: a list of voices")
+    v["names"] = {k: " ".join(x.split()) for k, x in v["names"].items() if text(k) and text(x) and x.strip()}
+    for who, want in [("operator", v["operator"]), ("default", v["default"]), *v["sessions"].items()]:
+        if not text(who) or not text(want):
+            raise ValueError(f"{who}: a voice or @group")
+        if want.startswith("@") and want[1:] not in v["groups"]:
+            raise ValueError(f"{who}: there's no group {want[1:]!r}")
+    v["sessions"] = {k: x for k, x in v["sessions"].items() if x}
+    return v
+
+
+def splice_table(text, name, section):
+    """text (TOML) with table name and its subtables replaced by section (appended if missing)."""
+    lines = text.splitlines(keepends=True)
+    start = end = None
+    for i, line in enumerate(lines):
+        m = re.match(r"\s*\[\[?\s*([^\]]+?)\s*\]", line)
+        if not m:
+            continue
+        inside = m.group(1) == name or m.group(1).startswith(name + ".")
+        if start is None and inside:
+            start = i
+        elif start is not None and end is None and not inside:
+            end = i
+        elif end is not None and inside:
+            raise ValueError(f"[{name}] is split up in the file: put its tables together first")
+    if start is None:
+        return text.rstrip("\n") + "\n\n" + section
+    end = len(lines) if end is None else end
+    while end > start + 1 and (not lines[end - 1].strip() or lines[end - 1].lstrip().startswith("#")):
+        end -= 1   # comments just before the next table are that table's
+    return "".join(lines[:start]) + section + ("\n" if end < len(lines) else "") + "".join(lines[end:])
+
+
+def write_voices(v):
+    v = check_voices(v)
+    path = config_file("token-ring", "config.toml")
+    old = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    new = splice_table(old, "voices", voices_toml(v))
+    got = tomllib.loads(new).get("voices", {})
+    if any(got.get(k, v[k]) != v[k] for k in VOICE_KEYS) or "pool" in got:
+        raise ValueError("the [voices] tables didn't come out as meant: edit config.toml by hand")
+    return save_config("token-ring", "config.toml", new)
+
+
+def voice_sample(voice, rate, text):
+    """WAV of text said in voice, at rate."""
+    name, inner = tts.split(voice)
+    chunks, stop = [], threading.Event()
+    tts.engine(name).synthesize(text[:300], inner, rate, chunks.append, stop)
+    return to_wav(b"".join(chunks))
+
+
 # The server
 
 class Handler(BaseHTTPRequestHandler):
@@ -648,6 +784,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"calls": read_calls(min(int(q.get("limit", 100)), 1000))})
             if path == "/api/callers":
                 return self.reply(200, {**read_callers(), "country_code": ami(country_code())})
+            if path == "/api/voices":
+                voices, errors = tts.available()
+                return self.reply(200, {"config": read_voices(), "available": voices, "errors": errors,
+                                        "sessions": voice_sessions(), "operator_now": tts.voice_for("operator")})
             m = re.fullmatch(r"/api/config/(asterisk|token-ring)/([\w.-]+)", path)
             if m:
                 kind, name = m.groups()
@@ -680,6 +820,14 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def do_PUT(self):
+        if urllib.parse.urlsplit(self.path).path == "/api/voices":
+            try:
+                return self.reply(200, {**write_voices(self.body().get("voices")), "config": read_voices()})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception as e:
+                log.warning("save voices: %s", e)
+                return self.reply(500, {"error": str(e)})
         if urllib.parse.urlsplit(self.path).path == "/api/callers":
             callers = self.body().get("callers")
             if not isinstance(callers, list):
@@ -710,6 +858,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
         try:
+            if path == "/api/voices/sample":
+                b = self.body()
+                if not isinstance(b.get("voice"), str) or not b["voice"]:
+                    return self.reply(400, {"error": "voice required"})
+                return self.reply(200, voice_sample(b["voice"], float(b.get("rate") or 1.0),
+                                                    str(b.get("text") or "Hello. This is how I sound.")), "audio/wav")
             m = re.fullmatch(r"/api/asterisk/(reload|restart)", path)
             if m:
                 if m.group(1) == "restart":

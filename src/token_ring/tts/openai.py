@@ -10,6 +10,8 @@ api_key_env = "OPENAI_API_KEY"     # environment variable holding the key, if on
 format = "wav"                     # or "pcm" (raw 16-bit mono at sample_rate: streams sooner)
 sample_rate = 24000                # for "pcm"
 instructions = ""                  # optional, for models that take them (gpt-4o-mini-tts)
+voices = []                        # the voices to offer on the web page; empty: asks the server
+                                   # (GET /audio/voices, as Kokoro-FastAPI has), else OpenAI's own
 """
 import json
 import os
@@ -19,7 +21,22 @@ from ..audio import FRAME_BYTES, from_wav, resample
 from . import TTS, sentences
 
 
+OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+
+
 class OpenAITTS(TTS):
+    def voices(self):
+        names = self.conf.get("voices") or []
+        if not names:
+            try:
+                req = urllib.request.Request(self.base() + "/audio/voices", headers=self.headers())
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    names = json.load(resp).get("voices", [])
+            except Exception:
+                names = OPENAI_VOICES if "api.openai.com" in self.base() else []
+        names = [n if isinstance(n, str) else n.get("id") or n.get("name", "") for n in names]
+        return [{"voice": n} for n in dict.fromkeys(filter(None, [*names, self.conf.get("voice", "")]))]
+
     def synthesize(self, text, voice, rate, emit, stop):
         for sentence in sentences(text):
             if stop.is_set():
@@ -35,12 +52,8 @@ class OpenAITTS(TTS):
             body["speed"] = rate
         if c.get("instructions"):
             body["instructions"] = c["instructions"]
-        headers = {"Content-Type": "application/json"}
-        key = os.environ.get(c.get("api_key_env", "OPENAI_API_KEY"), "")
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        url = c.get("url", "https://api.openai.com/v1").rstrip("/") + "/audio/speech"
-        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers=headers)
+        req = urllib.request.Request(self.base() + "/audio/speech", data=json.dumps(body).encode(),
+                                     method="POST", headers={"Content-Type": "application/json", **self.headers()})
         with urllib.request.urlopen(req, timeout=c.get("timeout", 30)) as resp:
             if fmt == "pcm":
                 sr, buf = c.get("sample_rate", 24000), b""
@@ -55,3 +68,10 @@ class OpenAITTS(TTS):
                 data = resp.read()
                 if not stop.is_set():
                     emit(from_wav(data))
+
+    def base(self):
+        return self.conf.get("url", "https://api.openai.com/v1").rstrip("/")
+
+    def headers(self):
+        key = os.environ.get(self.conf.get("api_key_env", "OPENAI_API_KEY"), "")
+        return {"Authorization": f"Bearer {key}"} if key else {}

@@ -9,6 +9,7 @@ register it as an entry point in the token_ring.tts group.
 """
 import hashlib
 import logging
+import random
 import re
 import threading
 import time
@@ -32,6 +33,12 @@ class TTS:
 
     def preload(self, voice):
         """Get ready to speak in voice (load a model, ...), so the first phrase isn't slow."""
+
+    def voices(self):
+        """The voices this engine offers, for the web page's Voices tab: dicts with "voice" (as
+        synthesize takes it) and, where known, "language", "quality" and "speaker". The default
+        offers just the configured voice."""
+        return [{"voice": self.conf["voice"]}] if self.conf.get("voice") else []
 
 
 SENTENCE = re.compile(r"(?<=[.!?;:])\s+")
@@ -68,21 +75,71 @@ def split(spec):
 
 def voice_for(key):
     """The voice for a speaker: "operator" (also everything the PBX itself says), or a session
-    key. A session not pinned in [voices] sessions gets one from the pool by hashing its key:
-    random, but the same on every call. Voices that share a model ("model:speaker") are grouped
-    so a model with a hundred speakers doesn't crowd out the rest."""
+    key. [voices] operator, a session's entry in [voices.sessions], and [voices] default (for
+    sessions with no entry) are each a voice or "@<group>" ([voices.groups]): a random one of the
+    group's voices, picked again each time (a call keeps the one it got: bridge Call.voice_of).
+    Voices in [voices] disabled are never used: a session whose voice is off gets the default,
+    and the default falls back to the operator's voice. With no default, sessions get one of the
+    older [voices] pool, by hashing the session's key (the same one each call)."""
     v = config.section("voices")
-    if key == "operator":
-        return v.get("operator") or default_voice()
-    if key in v.get("sessions", {}):
-        return v["sessions"][key]
-    pool = v.get("pool") or [v.get("operator") or default_voice()]
+    if key != "operator":
+        for want in (v.get("sessions", {}).get(key), v.get("default")):
+            got = resolve(want)
+            if got:
+                return got
+        pool = [s for s in v.get("pool") or [] if enabled(s)]
+        if pool and not v.get("default"):
+            return hashed(pool, key)
+    return resolve(v.get("operator")) or default_voice()
+
+
+def enabled(spec):
+    return spec not in config.section("voices").get("disabled", [])
+
+
+def resolve(want):
+    """A voice for a [voices] entry: the voice itself if it's on, or for "@group" a random one of
+    the group's that are on. None if there isn't one."""
+    if not want:
+        return None
+    if want.startswith("@"):
+        members = [s for s in config.section("voices").get("groups", {}).get(want[1:], []) if enabled(s)]
+        return random.choice(members) if members else None
+    return want if enabled(want) else None
+
+
+def hashed(pool, key):
+    """One of pool for key: random, but the same every time. Voices that share a model
+    ("model:speaker") are grouped so a model with a hundred speakers doesn't crowd out the rest."""
     groups = {}
     for spec in pool:
         groups.setdefault(spec.split(":")[0], []).append(spec)
     h = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
     group = groups[sorted(groups)[h % len(groups)]]
     return group[(h // len(groups)) % len(group)]
+
+
+def in_use():
+    """Every voice that may be used: the operator's, the groups and voices assigned, the pool."""
+    v = config.section("voices")
+    wants = [v.get("operator"), v.get("default"), *v.get("sessions", {}).values()]
+    specs = []
+    for want in filter(None, wants):
+        specs += v.get("groups", {}).get(want[1:], []) if want.startswith("@") else [want]
+    specs += v.get("pool") or []
+    return [s for s in dict.fromkeys(specs) if enabled(s)]
+
+
+def available():
+    """What every configured engine offers: [{"voice": "<engine>/<voice>", ...}], and the engines
+    that couldn't say ({name: error})."""
+    out, errors = [], {}
+    for name in config.section("tts").get("engines", {}):
+        try:
+            out += [{**v, "voice": f"{name}/{v['voice']}", "engine": name} for v in engine(name).voices()]
+        except Exception as e:
+            errors[name] = str(e)
+    return out, errors
 
 
 def default_voice():
@@ -118,8 +175,7 @@ def synthesize(text, spec, emit, stop):
 def preload(attempts=6, wait_s=10):
     """Load every configured voice, the operator's first (every call starts with it). Engines
     that are still starting (another container) are tried again a few times."""
-    v = config.section("voices")
-    specs = list(dict.fromkeys([voice_for("operator")] + list(v.get("pool", [])) + list(v.get("sessions", {}).values())))
+    specs = list(dict.fromkeys([voice_for("operator")] + in_use()))
     for attempt in range(attempts):
         failed = []
         for spec in specs:

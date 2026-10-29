@@ -159,6 +159,11 @@ certificate in `./tls`, otherwise plain HTTP):
 - **Allowed callers:** the numbers that may call in on a SIP trunk (anyone else is rejected
   without being answered), kept in Asterisk's `callers.conf`. See `[caller-allowed]` in
   `asterisk/extensions.conf` for the check to put in a trunk's dialplan.
+- **Voices:** every voice the text-to-speech engines offer, with a play button for each. With
+  **Advanced** on: name them, set their speaking rates, switch them on and off, put them in
+  groups, and choose who speaks in which: the operator, sessions in general, and particular
+  sessions, each a voice or a group (a random voice from it each call). Saving rewrites the
+  `[voices]` tables in `config.toml` (keeping the previous file), and new calls use it.
 - **Configuration:** Asterisk's files and token-ring's config, passwords hidden. Switch on
   **Advanced** to edit them: saving keeps the previous version and reloads what changed, and shows
   what Asterisk logged about it.
@@ -183,10 +188,11 @@ asking the AI on the phone to change them).
 
 ### Text-to-speech (`[tts]`, `[voices]`)
 
-Configure as many engines as you like and give each speaker a voice: the operator, sessions
-pinned by name, and a pool the other sessions are given voices from (each session keeps the same
-voice on every call). Voices can have names they introduce themselves by, and their own speaking
-rates.
+Configure as many engines as you like and give each speaker a voice: the operator, sessions in
+general (`default`), and particular sessions. Each is a voice or a group of voices (`"@<group>"`):
+a random one of the group's voices each call, kept for the rest of it. Voices can have names they
+introduce themselves by, and their own speaking rates, and can be switched off (`disabled`). The
+web page's Voices tab edits all of it.
 
 | type | What |
 |---|---|

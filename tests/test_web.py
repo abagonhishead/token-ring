@@ -228,3 +228,51 @@ def test_call_log(site, monkeypatch, tmp_path):
     assert web.prune_calls(now=now) == 1                                    # the 100-day-old one goes
     assert [c["uniqueid"] for c in web.read_calls()] == ["1.3", "1.2"]
     assert web.prune_calls(now=now) == 0
+
+
+def test_voices_saved(conf, tmp_path):
+    conf('''# top
+[tts]
+default = "piper"
+
+# Who speaks in which voice.
+[voices]
+operator = "piper/a"
+pool = ["piper/a", "piper/b"]   # old style
+rate = 0.9
+[voices.names]
+"piper/a" = "Ann"
+
+# Trigger words
+[keywords]
+engine = "off"
+''')
+    v = web.read_voices()
+    assert v["groups"] == {"pool": ["piper/a", "piper/b"]} and v["default"] == "@pool"
+    v["groups"]["team"] = ["piper/b", "piper/c:x y"]
+    v["sessions"]["my-project"] = "@team"
+    v["names"]["piper/c:x y"] = "  Cee  "
+    v["disabled"] = ["piper/b"]
+    web.write_voices(v)
+    text = (tmp_path / "config.toml").read_text()
+    assert text.startswith("# top\n[tts]") and "# Who speaks in which voice.\n[voices]\n" in text
+    assert "\n\n# Trigger words\n[keywords]\nengine = \"off\"\n" in text
+    import tomllib
+    assert "pool" not in tomllib.loads(text)["voices"]   # the old pool is a group now
+    config._cache.update(mtime=None)
+    v2 = web.read_voices()
+    assert v2["sessions"] == {"my-project": "@team"} and v2["names"]["piper/c:x y"] == "Cee"
+    assert v2["rate"] == 0.9 and v2["disabled"] == ["piper/b"] and v2["default"] == "@pool"
+    assert config.section("keywords")["engine"] == "off"
+    from token_ring.tts import voice_for
+    assert voice_for("my-project") == "piper/c:x y"
+    with pytest.raises(ValueError):
+        web.write_voices({**v2, "operator": "@nope"})
+    with pytest.raises(ValueError):
+        web.write_voices({**v2, "rate": 9})
+
+
+def test_splice_table():
+    assert web.splice_table("a = 1\n", "voices", "[voices]\nx = 1\n") == "a = 1\n\n[voices]\nx = 1\n"
+    with pytest.raises(ValueError):
+        web.splice_table("[voices]\n[other]\n[voices.names]\n", "voices", "[voices]\n")

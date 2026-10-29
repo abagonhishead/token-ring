@@ -33,3 +33,33 @@ def test_voices(conf):
 def test_default_voice(conf):
     conf('[tts.engines.piper]\nvoice = "en_GB-alan-medium"\n')
     assert voice_for("operator") == "piper/en_GB-alan-medium"
+
+
+def test_voice_groups(conf):
+    conf("""
+[voices]
+operator = "@ops"
+default = "@team"
+disabled = ["piper/b", "piper/x"]
+[voices.groups]
+ops = ["piper/x"]
+team = ["piper/a", "piper/b", "piper/c"]
+[voices.sessions]
+pinned = "piper/p"
+off = "piper/x"
+""")
+    from token_ring.tts import default_voice, in_use
+    assert voice_for("operator") == default_voice()   # its group's only voice is off
+    assert {voice_for("s") for _ in range(60)} == {"piper/a", "piper/c"}   # random, never b
+    assert voice_for("pinned") == "piper/p"
+    assert voice_for("off") in ("piper/a", "piper/c")   # its voice is off: the default
+    assert set(in_use()) == {"piper/a", "piper/c", "piper/p"}
+
+
+def test_call_keeps_its_voice(conf):
+    from token_ring import bridge
+    conf('[voices]\ndefault = "@g"\n[voices.groups]\ng = ["piper/a", "piper/b", "piper/c", "piper/d"]\n')
+    call = bridge.Call.__new__(bridge.Call)
+    call.voices = {}
+    first = call.voice_of("alpha")
+    assert all(call.voice_of("alpha") == first for _ in range(20))

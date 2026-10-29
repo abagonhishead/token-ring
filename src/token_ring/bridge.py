@@ -426,6 +426,7 @@ class Call:
         self.reader, self.writer = reader, writer
         self.uuid = "?"
         self.queue = asyncio.Queue()  # (text, label, voice) waiting to be said
+        self.voices = {}              # speaker -> the voice it has on this call (voice_of)
         self.current = None           # the speak() task playing now
         self.stop_synth = threading.Event()
         self.transcribing = False
@@ -502,9 +503,16 @@ class Call:
             self.current = asyncio.create_task(self.speak(text, label, spec))
             await asyncio.wait([self.current])
 
+    def voice_of(self, key):
+        """The voice a speaker ("operator" or a session key) has on this call: one from a group
+        is picked at random the first time, then kept for the call."""
+        if key not in self.voices:
+            self.voices[key] = voice_for(key)
+        return self.voices[key]
+
     def say(self, text, label, voice=None):
         """Queue text to be said, in voice (default: the operator's, which the PBX speaks in)."""
-        self.queue.put_nowait((text, label, voice or voice_for("operator")))
+        self.queue.put_nowait((text, label, voice or self.voice_of("operator")))
 
     def hush(self):
         """Stop speaking and drop anything still queued."""
@@ -905,7 +913,7 @@ class Operator(Call):
             who = "the operator" if call["key"] == "operator" else f"the {call['label']} session"
             await self.switch(call["key"], hello=f"Hello, this is a call from {self.assistant} on "
                                                 f"{call.get('host', 'the computer')}, {who}.")
-            self.say(speakable(call["message"]), "message", voice_for(call["key"]))
+            self.say(speakable(call["message"]), "message", self.voice_of(call["key"]))
             return
         self.start_agent("operator", "operator", "operator")
         self.key = "operator"
@@ -915,7 +923,7 @@ class Operator(Call):
         ext = " ".join(str(bridge_conf().get("voicemail_extension", "")))
         dial = f": dial {ext} to hear them" if ext.strip() else ""
         waiting = f" You have {new} new voicemail{'' if new == 1 else 's'}{dial}." if new else ""
-        name = persona(voice_for("operator"))
+        name = persona(self.voice_of("operator"))
         self.say(f"Operator{f', {name} speaking' if name else ''}.{waiting} Go ahead.", "connect")
 
     async def switch(self, key, hello=None):
@@ -943,9 +951,9 @@ class Operator(Call):
         self.key = key
         log.info("%s talking to %s", self.uuid, key)
         self.say(hello or f"Connected to {self.label}.", "connect")
-        name = persona(voice_for(key)) if key != "operator" else None
+        name = persona(self.voice_of(key)) if key != "operator" else None
         if name:  # the session says hello in its own voice
-            self.say(f"Hi, it's {name}.", "intro", voice_for(key))
+            self.say(f"Hi, it's {name}.", "intro", self.voice_of(key))
 
     def on_event(self, key, stop, ev):
         t = self.targets.get(key)
@@ -982,7 +990,7 @@ class Operator(Call):
             if text and self.ending and self.replied:  # a second goodbye, written after hanging up
                 log.info("%s after hanging up, not said: %s", self.uuid, text[:80])
             elif text:
-                self.say(text, "reply", voice_for(key))
+                self.say(text, "reply", self.voice_of(key))
                 self.replied = True
         elif "dialog" in ev:
             self.on_dialog(ev["dialog"])
@@ -1007,7 +1015,7 @@ class Operator(Call):
         self.hush()  # a question takes priority over whatever was being said
         if d["kind"] in asking and not (old and old["kind"] in asking + ("review",)):
             self.say(self.instructions(d), "dialog")  # the first question of a set
-        self.say(self.question_text(d), "dialog", voice_for(self.key))  # the session asking, in its voice
+        self.say(self.question_text(d), "dialog", self.voice_of(self.key))  # the session asking, in its voice
 
     def instructions(self, d):
         """How to answer, said before the first question (again on *)."""
@@ -1141,7 +1149,7 @@ class Operator(Call):
             if digit == "*" and d["kind"] in ("question", "multi"):
                 self.say(self.instructions(d), "dialog")
             else:
-                self.say(self.question_text(d), "dialog", voice_for(self.key))
+                self.say(self.question_text(d), "dialog", self.voice_of(self.key))
         elif digit == "0" and self.key == "operator":
             await self.read_menu()
         elif digit == "#":
@@ -1222,7 +1230,7 @@ class Voicemail(Operator):
         saved = [m for m in body["messages"] if m["heard"]]
         self.messages = new + saved
         count = lambda n, what: f"{'no' if n == 0 else n} {what} message{'' if n == 1 else 's'}"
-        name = persona(voice_for("operator"))
+        name = persona(self.voice_of("operator"))
         self.say(f"Voicemail{f', {name} speaking' if name else ''}. You have {count(len(new), 'new')}"
                  f"{f', and {count(len(saved), 'saved')}' if saved else ''}.", "vm")
         self.say(self.MENU, "vm")
@@ -1233,8 +1241,8 @@ class Voicemail(Operator):
         self.mode = "after"
         self.say(f"{'Saved message' if m['heard'] else 'New message'} from {m['label']}, "
                  f"{spoken_when(m['at'])}.", "vm")
-        name = persona(voice_for(m["from"]))
-        self.say((f"Hi, it's {name}. " if name else "") + speakable(m["text"]), "message", voice_for(m["from"]))
+        name = persona(self.voice_of(m["from"]))
+        self.say((f"Hi, it's {name}. " if name else "") + speakable(m["text"]), "message", self.voice_of(m["from"]))
         self.say(self.AFTER, "vm")
         if not m["heard"]:
             m["heard"] = True

@@ -61,7 +61,8 @@ DEFAULTS = {
     "backends": {},
     "stt": {"engine": "openai"},
     "tts": {"default": "piper", "engines": {"piper": {"type": "piper"}}},
-    "voices": {"operator": "", "pool": [], "sessions": {}, "names": {}, "rates": {}, "rate": 1.0},
+    "voices": {"operator": "", "default": "", "pool": [], "groups": {}, "disabled": [], "sessions": {},
+               "names": {}, "rates": {}, "rate": 1.0},
     "keywords": {"engine": "vosk", "model": "", "phrases": {
         "stop": ["stop", "hang on", "wait", "shush", "quiet"],
         "interrupt": ["cancel that"],
