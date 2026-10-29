@@ -160,9 +160,10 @@ certificate in `./tls`, otherwise plain HTTP):
   without being answered), kept in Asterisk's `callers.conf`. See `[caller-allowed]` in
   `asterisk/extensions.conf` for the check to put in a trunk's dialplan.
 - **Voices:** every voice the text-to-speech engines offer, with a play button for each. With
-  **Advanced** on: name them, set their speaking rates, switch them on and off, put them in
-  groups, and choose who speaks in which: the operator, sessions in general, and particular
-  sessions, each a voice or a group (a random voice from it each call). Saving rewrites the
+  **Advanced** on: name them (and choose which say their name when they start speaking), set
+  their speaking rates, switch them on and off, put them in groups, and choose who speaks in which: the operator, sessions in general, and particular
+  sessions, each a voice or a group (a random voice from it each call). **Name unnamed voices**
+  plays each voice without a name and suggests a man's or woman's name by how low it sounds. Saving rewrites the
   `[voices]` tables in `config.toml` (keeping the previous file), and new calls use it.
 - **Configuration:** Asterisk's files and token-ring's config, passwords hidden. Switch on
   **Advanced** to edit them: saving keeps the previous version and reloads what changed, and shows

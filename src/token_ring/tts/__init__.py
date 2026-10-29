@@ -148,8 +148,12 @@ def default_voice():
 
 
 def persona(spec):
-    """The name a voice introduces itself by ([voices] names), or None."""
-    return config.section("voices").get("names", {}).get(spec)
+    """The name a voice introduces itself by ([voices] names), or None: only voices in [voices]
+    introduce do, if it's set (without it, every named voice does)."""
+    v = config.section("voices")
+    if "introduce" in v and spec not in v["introduce"]:
+        return None
+    return v.get("names", {}).get(spec)
 
 
 def rate_for(spec):

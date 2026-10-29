@@ -137,8 +137,9 @@ button.btn:disabled { opacity: .5; cursor: default; }
 .group-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .group-head strong { font-family: var(--mono); font-size: 13px; }
 table.voices td { vertical-align: middle; }
-table.voices tr.off td:not(:nth-child(5)) { opacity: .5; }
+table.voices tr.off td:not(:nth-child(6)) { opacity: .5; }
 table.voices input.vname { width: 9.5em; }
+table.voices input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 table.voices input.vrate { width: 4.8em; }
 .gtoggle { font: inherit; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line);
            background: var(--panel); color: var(--muted); cursor: pointer; margin: 1px 2px 1px 0; }
@@ -243,6 +244,7 @@ input:disabled, select:disabled { opacity: .65; }
         <input type="search" id="vz-filter" placeholder="Filter voices" size="20">
         <select id="vz-lang"></select>
         <div class="seg" id="vz-show"><button data-show="used">In use</button><button data-show="on">On</button><button data-show="all">All</button></div>
+        <button class="btn" id="vz-autoname" title="Plays each voice that has no name, and gives it a man's or woman's name by how low it sounds">Name unnamed voices</button>
         <span class="spacer"></span>
         <input type="text" id="vz-sample" size="30" value="Hello. This is how I sound." title="What the play buttons say">
         <span class="muted" id="vz-count"></span>
@@ -825,19 +827,22 @@ function renderVoices() {
   });
   $("#vz-count").textContent = `${rows.length} of ${vz.all.length} voices`;
   const dis = edit ? "" : " disabled";
-  $("#vz-list").innerHTML = rows.length ? `<tr><th></th><th>Name</th><th>Voice</th><th>Rate</th><th>On</th><th>Groups</th><th>Used by</th></tr>` + rows.map(s => {
+  $("#vz-list").innerHTML = rows.length ? `<tr><th></th><th>Name</th><th title="Says its name when it starts speaking: “Hi, it's Poppy”">Greets</th><th>Voice</th><th>Rate</th><th>On</th><th>Groups</th><th>Used by</th></tr>` + rows.map(s => {
     const v = vz.byId[s], on = vzOn(s), used = vzUsedBy(s);
     const rate = c.rates[s] ?? "";
     return `<tr class="${on ? "" : "off"}">
       <td><button class="play" data-play="${esc(s)}" title="Play" aria-label="Play ${esc(vzLabel(s))}">▶</button></td>
       <td><input type="text" class="vname" data-name="${esc(s)}" value="${esc(c.names[s] || "")}" placeholder="${esc(v?.speaker || "")}"${dis}></td>
-      <td><span class="mono">${esc(s)}</span><br>${v ? [v.language, v.quality].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("") : '<span class="tag bad">not offered by its engine</span>'}</td>
+      <td><input type="checkbox" data-greet="${esc(s)}" title="Says its name when it starts speaking"${c.introduce.includes(s) ? " checked" : ""}${edit && c.names[s] ? "" : " disabled"}></td>
+      <td><span class="mono">${esc(s)}</span><br>${v ? [v.language, v.quality].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("") : '<span class="tag bad">not offered by its engine</span>'}${vz.heard?.[s] ? `<span class="tag" title="its measured pitch">sounds ${esc(vz.heard[s].sounds)}, ${vz.heard[s].pitch_hz} Hz</span>` : ""}</td>
       <td><input type="number" class="vrate" data-rate="${esc(s)}" min="0.3" max="3" step="0.01" value="${esc(rate)}" placeholder="${esc(c.rates[vzModel(s)] ?? c.rate)}"${dis}></td>
       <td><label class="switch"><input type="checkbox" data-on="${esc(s)}"${on ? " checked" : ""}${dis}><span class="track"></span></label></td>
       <td>${names.map(g => `<button class="gtoggle${c.groups[g].includes(s) ? " on" : ""}" data-group="${esc(g)}" data-spec="${esc(s)}"${dis}>${esc(g)}</button>`).join("") || '<span class="muted">—</span>'}</td>
       <td class="muted">${esc(used.map(k => labels[k] || k).join(", "))}</td></tr>`;
   }).join("") : '<tr><td class="muted">No voices match.</td></tr>';
   document.querySelectorAll("#voices select[data-who], #voices select[data-session], #vz-rate").forEach(el => el.disabled = !edit);
+  $("#vz-autoname").hidden = !edit;
+  $("#vz-autoname").disabled = vz.naming || !vz.all.some(s => vz.byId[s] && !c.names[s]);
   vzChanged();
 }
 function vzEdit(fn) { fn(vz.cfg); renderVoices(); }
@@ -846,7 +851,13 @@ $("#voices").addEventListener("change", e => {
   if (d.who) vzEdit(c => c[d.who] = t.value);
   else if (d.session !== undefined) vzEdit(c => c.sessions[d.session] = t.value);
   else if (t.id === "vz-rate") vzEdit(c => c.rate = +t.value || 1);
-  else if (d.name) vzEdit(c => { const n = t.value.trim(); if (n) c.names[d.name] = n; else delete c.names[d.name]; });
+  else if (d.name) vzEdit(c => {
+    const n = t.value.trim(), had = c.names[d.name];
+    if (n) c.names[d.name] = n; else delete c.names[d.name];
+    if (!n) c.introduce = c.introduce.filter(x => x !== d.name);
+    else if (!had && !c.introduce.includes(d.name)) c.introduce.push(d.name);   // a name you give, it says
+  });
+  else if (d.greet) vzEdit(c => c.introduce = t.checked ? [...new Set([...c.introduce, d.greet])] : c.introduce.filter(x => x !== d.greet));
   else if (d.rate) vzEdit(c => { if (t.value === "") delete c.rates[d.rate]; else c.rates[d.rate] = +t.value; });
   else if (d.on) vzEdit(c => c.disabled = t.checked ? c.disabled.filter(x => x !== d.on) : [...c.disabled, d.on]);
   else if (t.id === "vz-lang") { store.set("vzlang", t.value); renderVoices(); }
@@ -903,6 +914,26 @@ $("#vz-session-add").onsubmit = e => {
   if (!k) return;
   vzEdit(c => c.sessions[k] = c.default || c.operator || "");
   $("#vz-session-other").value = "";
+};
+$("#vz-autoname").onclick = async () => {
+  const todo = vz.all.filter(s => vz.byId[s] && !vz.cfg.names[s]);
+  if (!todo.length || !confirm(`Give names to ${todo.length} voices? Each one is played to hear whether it sounds male or female, which takes a while; nothing is saved until you press Save.`)) return;
+  vz.naming = true; vz.heard = vz.heard || {};
+  const btn = $("#vz-autoname"), failed = [];
+  try {
+    for (let i = 0; i < todo.length; i += 8) {
+      btn.textContent = `Naming… ${i} of ${todo.length}`;
+      const r = await api("/api/voices/names", {method: "POST", body: JSON.stringify({voices: todo.slice(i, i + 8), taken: Object.values(vz.cfg.names)})});
+      for (const [s, got] of Object.entries(r.names)) {
+        if (got.error) { failed.push(s); continue; }
+        if (!vz.cfg.names[s]) vz.cfg.names[s] = got.name;   // (not introduced: tick Greets for those that should)
+        vz.heard[s] = got;
+      }
+      renderVoices();
+    }
+    if (failed.length) alert(`Couldn't play ${failed.length} of them: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`);
+  } catch (err) { alert(`Naming stopped: ${err.message}`); }
+  vz.naming = false; btn.textContent = "Name unnamed voices"; renderVoices();
 };
 $("#vz-discard").onclick = () => { vz.cfg = JSON.parse(vzSaved); renderVoices(); };
 $("#vz-save").onclick = async () => {

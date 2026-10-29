@@ -51,3 +51,24 @@ def from_wav(data):
         if w.getsampwidth() != 2:
             raise ValueError("only 16-bit WAV is supported")
         return resample(w.readframes(w.getnframes()), w.getframerate(), w.getnchannels())
+
+
+def pitch_hz(pcm, rate=RATE):
+    """The median pitch of the voiced parts of speech (16-bit mono PCM), by autocorrelation; 0 if
+    there are none. Men's voices are mostly 85-155 Hz, women's 165-255 Hz."""
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    size, lo, hi = int(0.04 * rate), int(rate / 400), int(rate / 60)
+    loud = 0.1 * (np.abs(x).max() if len(x) else 0)
+    found = []
+    for start in range(0, len(x) - size, size // 2):
+        f = x[start:start + size]
+        if np.abs(f).mean() < loud * 0.3:
+            continue
+        f = f - f.mean()
+        ac = np.correlate(f, f, "full")[size - 1:]
+        if ac[0] <= 0:
+            continue
+        lag = lo + int(np.argmax(ac[lo:hi]))
+        if ac[lag] / ac[0] > 0.5:
+            found.append(rate / lag)
+    return float(np.median(found)) if found else 0.0

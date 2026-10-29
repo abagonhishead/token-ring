@@ -63,3 +63,10 @@ def test_call_keeps_its_voice(conf):
     call.voices = {}
     first = call.voice_of("alpha")
     assert all(call.voice_of("alpha") == first for _ in range(20))
+
+
+def test_introduce(conf):
+    conf('[voices.names]\n"piper/a" = "Ann"\n"piper/b" = "Bob"\n')
+    assert persona("piper/a") == "Ann" and persona("piper/b") == "Bob"   # no introduce: all named do
+    conf('[voices]\nintroduce = ["piper/a"]\n[voices.names]\n"piper/a" = "Ann"\n"piper/b" = "Bob"\n')
+    assert persona("piper/a") == "Ann" and persona("piper/b") is None

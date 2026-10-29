@@ -249,10 +249,12 @@ engine = "off"
 ''')
     v = web.read_voices()
     assert v["groups"] == {"pool": ["piper/a", "piper/b"]} and v["default"] == "@pool"
+    assert v["introduce"] == ["piper/a"]   # every named voice, as before introduce was set
     v["groups"]["team"] = ["piper/b", "piper/c:x y"]
     v["sessions"]["my-project"] = "@team"
     v["names"]["piper/c:x y"] = "  Cee  "
     v["disabled"] = ["piper/b"]
+    v["introduce"] = ["piper/c:x y", "piper/nameless"]
     web.write_voices(v)
     text = (tmp_path / "config.toml").read_text()
     assert text.startswith("# top\n[tts]") and "# Who speaks in which voice.\n[voices]\n" in text
@@ -263,6 +265,9 @@ engine = "off"
     v2 = web.read_voices()
     assert v2["sessions"] == {"my-project": "@team"} and v2["names"]["piper/c:x y"] == "Cee"
     assert v2["rate"] == 0.9 and v2["disabled"] == ["piper/b"] and v2["default"] == "@pool"
+    assert v2["introduce"] == ["piper/c:x y"]   # only named voices can say their name
+    from token_ring.tts import persona
+    assert persona("piper/c:x y") == "Cee" and persona("piper/a") is None
     assert config.section("keywords")["engine"] == "off"
     from token_ring.tts import voice_for
     assert voice_for("my-project") == "piper/c:x y"
@@ -276,3 +281,19 @@ def test_splice_table():
     assert web.splice_table("a = 1\n", "voices", "[voices]\nx = 1\n") == "a = 1\n\n[voices]\nx = 1\n"
     with pytest.raises(ValueError):
         web.splice_table("[voices]\n[other]\n[voices.names]\n", "voices", "[voices]\n")
+
+
+def test_suggest_names(monkeypatch):
+    import random
+    import numpy as np
+    from token_ring.audio import pitch_hz
+    t = np.arange(16000) / 16000
+    hum = lambda hz: (np.sin(2 * np.pi * hz * t) * 8000).astype("<i2").tobytes()
+    assert abs(pitch_hz(hum(120)) - 120) < 3 and abs(pitch_hz(hum(210)) - 210) < 5
+    pitches = {"piper/low": 110, "piper/high": 220, "piper/low2": 130}
+    monkeypatch.setattr(web, "voice_pcm", lambda voice, rate, text: hum(pitches[voice]))
+    got = web.suggest_names(list(pitches), ["Oliver"], random.Random(1))
+    assert got["piper/low"]["sounds"] == "male" and got["piper/low"]["name"] in web.MALE_NAMES
+    assert got["piper/high"]["sounds"] == "female" and got["piper/high"]["name"] in web.FEMALE_NAMES
+    names = [g["name"] for g in got.values()]
+    assert len(set(names)) == 3 and "Oliver" not in names

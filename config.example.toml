@@ -113,12 +113,13 @@ pool = []                      # older: sessions get one of these by hashing the
                                # same voice every call); used when default is ""
 rate = 1.0                     # speaking rate: 1 is the voice's own pace, 1.2 is 20% faster
 disabled = []                  # voices that are never used
+# introduce = []               # the named voices that say their name; without it, all named ones do
 [voices.groups]
 # team = ["piper/en_GB-alan-medium", "piper/en_GB-semaine-medium:poppy"]
 [voices.sessions]              # voices for particular sessions
 # my-project = "piper/en_GB-semaine-medium:poppy"
 # other-project = "@team"
-[voices.names]                 # voices with these names introduce themselves ("Hi, it's Poppy.")
+[voices.names]                 # voices' names, which they introduce themselves by ("Hi, it's Poppy.")
 # "piper/en_GB-semaine-medium:poppy" = "Poppy"
 [voices.rates]                 # per voice, or per model ("piper/en_GB-semaine-medium")
 # "piper/en_GB-alan-medium" = 1.1

@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
 from . import bridge, config, tts
-from .audio import to_wav
+from .audio import pitch_hz, to_wav
 
 log = logging.getLogger("token-ring")
 
@@ -596,7 +596,7 @@ def reload_asterisk(name):
 # tab edits the [voices] tables, rewriting just them (their comments go; the rest of the file
 # is kept as it is).
 
-VOICE_KEYS = ("operator", "default", "rate", "disabled", "groups", "sessions", "names", "rates")
+VOICE_KEYS = ("operator", "default", "rate", "disabled", "introduce", "groups", "sessions", "names", "rates")
 GROUP_NAME = re.compile(r"[\w-]{1,40}")
 
 
@@ -605,7 +605,8 @@ def read_voices():
     group, "pool", that sessions use: saving makes that the default (a random one each call)."""
     v = config.section("voices")
     out = {"operator": v.get("operator", ""), "default": v.get("default", ""), "rate": v.get("rate", 1.0),
-           "disabled": list(v.get("disabled", [])), "groups": dict(v.get("groups", {})),
+           "disabled": list(v.get("disabled", [])), "introduce": list(v.get("introduce", v.get("names", {}))),
+           "groups": dict(v.get("groups", {})),
            "sessions": dict(v.get("sessions", {})), "names": dict(v.get("names", {})),
            "rates": dict(v.get("rates", {}))}
     if v.get("pool") and not out["default"]:
@@ -641,7 +642,7 @@ def toml_value(v):
 
 def voices_toml(v):
     out = ["[voices]", "# Edited on the web page's Voices tab (saving there rewrites these tables, and their comments)"]
-    out += [f"{k} = {toml_value(v[k])}" for k in ("operator", "default", "rate", "disabled")]
+    out += [f"{k} = {toml_value(v[k])}" for k in ("operator", "default", "rate", "disabled", "introduce")]
     for table in ("groups", "sessions", "names", "rates"):
         out.append(f"[voices.{table}]")
         out += [f"{toml_key(k)} = {toml_value(x)}" for k, x in v[table].items()]
@@ -673,9 +674,12 @@ def check_voices(v):
         if not isinstance(members, list) or not all(map(text, members)):
             raise ValueError(f"group {name}: a list of voices")
         v["groups"][name] = list(dict.fromkeys(members))
-    if not isinstance(v["disabled"], list) or not all(map(text, v["disabled"])):
-        raise ValueError("disabled: a list of voices")
+    for k in ("disabled", "introduce"):
+        v[k] = v[k] or []
+        if not isinstance(v[k], list) or not all(map(text, v[k])):
+            raise ValueError(f"{k}: a list of voices")
     v["names"] = {k: " ".join(x.split()) for k, x in v["names"].items() if text(k) and text(x) and x.strip()}
+    v["introduce"] = [s for s in dict.fromkeys(v["introduce"]) if s in v["names"]]
     for who, want in [("operator", v["operator"]), ("default", v["default"]), *v["sessions"].items()]:
         if not text(who) or not text(want):
             raise ValueError(f"{who}: a voice or @group")
@@ -721,10 +725,50 @@ def write_voices(v):
 
 def voice_sample(voice, rate, text):
     """WAV of text said in voice, at rate."""
+    return to_wav(voice_pcm(voice, rate, text))
+
+
+def voice_pcm(voice, rate, text):
     name, inner = tts.split(voice)
     chunks, stop = [], threading.Event()
     tts.engine(name).synthesize(text[:300], inner, rate, chunks.append, stop)
-    return to_wav(b"".join(chunks))
+    return b"".join(chunks)
+
+
+# Names for voices that haven't got one, by how the voice sounds: a low voice (below
+# PITCH_SPLIT_HZ) gets a man's name. 153 Hz splits Piper's 109 VCTK speakers by their recorded
+# gender (the men's at most 150 Hz, the women's at least 156).
+PITCH_SPLIT_HZ = 153
+FEMALE_NAMES = """Abigail Ada Alice Amelia Anna Beatrice Bethany Caitlin Charlotte Chloe Clara Daisy
+Eleanor Eliza Ellie Emily Erin Esme Evie Fiona Florence Freya Georgia Grace Hannah Harriet Holly
+Imogen Isla Ivy Jasmine Jessica Juliet Katie Lily Lucy Lydia Maisie Martha Matilda Megan Millie
+Molly Nancy Niamh Olivia Penny Phoebe Rachel Rosie Ruby Sophie Stella Tilly Violet Willow Zara""".split()
+MALE_NAMES = """Albert Alfie Angus Archie Arthur Barnaby Ben Callum Charlie Dan Declan Dominic Ed
+Elliot Ewan Felix Finn Fraser Freddie George Gethin Harry Henry Hugh Isaac Jack Jacob Jamie Joe
+Jonah Kit Leo Louis Luke Max Miles Nathan Ned Noah Oliver Oscar Owen Patrick Rhys Robin Rory Rufus
+Sam Seb Stanley Theo Tobias Tom Will Wilf Zach""".split()
+
+
+def suggest_names(voices, taken, rng=None):
+    """{voice: {"name", "pitch_hz", "sounds"}} for voices (a list), each name new: not in taken,
+    nor given to another of them. Each voice says a sentence so its pitch can be measured."""
+    import random
+    rng = rng or random.Random()
+    used = {n.lower() for n in taken}
+    out = {}
+    for voice in voices:
+        try:
+            hz = pitch_hz(voice_pcm(voice, 1.0, "Hello there, this is how my voice sounds today."))
+        except Exception as e:
+            out[voice] = {"error": str(e)}
+            continue
+        sounds = "male" if 0 < hz < PITCH_SPLIT_HZ else "female"
+        pool = [n for n in (MALE_NAMES if sounds == "male" else FEMALE_NAMES) if n.lower() not in used]
+        pool = pool or [n for n in MALE_NAMES + FEMALE_NAMES if n.lower() not in used] or ["Voice"]
+        name = rng.choice(pool)
+        used.add(name.lower())
+        out[voice] = {"name": name, "pitch_hz": round(hz), "sounds": sounds}
+    return out
 
 
 # The server
@@ -858,6 +902,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
         try:
+            if path == "/api/voices/names":
+                b = self.body()
+                voices, taken = b.get("voices"), b.get("taken") or []
+                if not isinstance(voices, list) or not all(isinstance(v, str) for v in voices) or len(voices) > 50:
+                    return self.reply(400, {"error": "voices: a list of up to 50"})
+                return self.reply(200, {"names": suggest_names(voices, [str(t) for t in taken])})
             if path == "/api/voices/sample":
                 b = self.body()
                 if not isinstance(b.get("voice"), str) or not b["voice"]:
