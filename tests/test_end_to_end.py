@@ -454,3 +454,32 @@ def test_call_app_fallback(system, conf, tmp_path, monkeypatch):
         assert await bridge.ring_app(ports["echo"], '"Test" <700>', 45)
         assert not bridge.FALLBACK
     asyncio.run(main())
+
+
+def test_session_line(system):
+    """A session's direct line (3xx) goes straight to it, without the operator."""
+    ports, said, _ = system
+    from token_ring.backends import echo
+    echo._state.clear()   # (an earlier test leaves alpha with a dialog up)
+
+    async def main():
+        await serve(ports)
+        lines = gw(ports, "GET", "/sessions")
+        alpha = next(s for s in lines if s["key"] == "alpha")
+        assert alpha["line"] == "301"           # numbered in order the first time they're seen
+        replies("Hello there.")
+        c = Caller(ports["op"])
+        bridge.LINES[c.uuid] = "301"
+        async with c:
+            await until(said_has(said, "Connected to alpha"))
+            assert not any("Operator" in s for s in said)
+            await c.speak()
+            await until(lambda: any(s.startswith("alpha heard:") and "Hello there." in s for s in said))
+        said.clear()
+        c = Caller(ports["op"])
+        bridge.LINES[c.uuid] = "399"
+        async with c:
+            await until(said_has(said, "There is no session on line 3 9 9. Goodbye."))
+            await until(lambda: c.hung_up)
+        assert gw(ports, "GET", "/sessions") == lines   # the numbers stay put
+    asyncio.run(main())

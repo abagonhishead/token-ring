@@ -344,8 +344,10 @@ async def update_mwi(req_id, new, old):
 
 
 # Which phone each call to the bridge's ports came from: the dialplan sends a TokenRingCall user
-# event (UUID, Endpoint) just before it connects the call. {AudioSocket UUID: (endpoint, time)}
+# event (UUID, Endpoint, and Line for a session's direct line) just before it connects the call.
+# {AudioSocket UUID: (endpoint, time)}, and {UUID: line}
 CALLERS = {}
+LINES = {}
 CALLERS_KEEP_S = 60
 
 
@@ -369,7 +371,10 @@ async def text_replies_loop():
                     now = time.monotonic()
                     for k in [k for k, (_, t) in CALLERS.items() if now - t > CALLERS_KEEP_S]:
                         del CALLERS[k]
+                        LINES.pop(k, None)
                     CALLERS[ev.get("UUID", "").lower()] = (ev.get("Endpoint", ""), now)
+                    if ev.get("Line"):
+                        LINES[ev.get("UUID", "").lower()] = ev["Line"]
                 elif ev.get("Event") == "UserEvent" and ev.get("UserEvent") == "TokenRingText":
                     body = base64.b64decode(ev.get("Body", "")).decode(errors="replace")
                     log.info("text from %s to %s: %r", ev.get("From"), ev.get("To"), body[:80])
@@ -803,6 +808,11 @@ class Operator(Call):
                 return hit[0] if hit else None
             await asyncio.sleep(0.05)
 
+    async def dialled_line(self, wait=1.0):
+        """The session line this call dialled (Line in TokenRingCall), or None."""
+        await self.calling_endpoint(wait)
+        return LINES.get(getattr(self, "call_uuid", "").lower())
+
     async def mailbox_query(self, wait=2.0):
         """The query that picks this caller's voicemail: "" for the user's phone, ?mailbox=<ext>
         for another phone, None if the phone is unknown (then there's no voicemail for it)."""
@@ -915,6 +925,16 @@ class Operator(Call):
                                                 f"{call.get('host', 'the computer')}, {who}.")
             self.say(speakable(call["message"]), "message", self.voice_of(call["key"]))
             return
+        line = await self.dialled_line()
+        if line:  # a session's direct line: straight through, no operator
+            session = next((s for s in self.sessions if str(s.get("line", "")) == line), None)
+            spoken = " ".join(line)
+            if not session or session["status"] == "down":
+                self.say(f"{session['label'] + ' is not running' if session else 'There is no session on line ' + spoken}."
+                         " Goodbye.", "down")
+                return await self.hangup()
+            log.info("%s line %s: %s", self.uuid, line, session["key"])
+            return await self.switch(session["key"])
         self.start_agent("operator", "operator", "operator")
         self.key = "operator"
         box = await self.mailbox_query(wait=1.0)

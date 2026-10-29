@@ -51,6 +51,7 @@ call_gap_seconds = 120         # a session may ring at most this often
 backend = "claude-code"        # a [backends.<name>] below, a plugin, or "module:Class"
 operator_prompt = ""           # added to the operator's instructions (what else it looks after)
 session_prompt = ""            # added to new phone conversations' instructions
+lines = "301-399"              # each session's direct line (dialplan _3XX), kept in data_dir; "" for none
 [gateway.labels]               # how session keys are said, where the key doesn't say it well
 # rc = "general use"
 

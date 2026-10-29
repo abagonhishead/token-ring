@@ -652,10 +652,11 @@ def read_voices():
 
 
 def voice_sessions():
-    """The sessions the gateway knows ([{"key", "label"}]), for assigning voices; [] if it's down."""
+    """The sessions the gateway knows ([{"key", "label", "line", "status"}]); [] if it's down."""
     try:
         code, body = bridge.gateway().call("GET", "/sessions")
-        return [{"key": x["key"], "label": x.get("label", x["key"])} for x in body] if code == 200 else []
+        return [{"key": x["key"], "label": x.get("label", x["key"]), "line": x.get("line", ""),
+                 "status": x.get("status", "")} for x in body] if code == 200 else []
     except Exception:
         return []
 
@@ -855,6 +856,7 @@ class Handler(BaseHTTPRequestHandler):
                 status["services"] = services()
                 status["host"] = socket.gethostname()
                 status["time"] = time.time()
+                status["sessions"] = voice_sessions()
                 return self.reply(200, status)
             if path == "/api/logs":
                 return self.logs(q.get("source", "asterisk"), int(q.get("lines", 300)), q.get("follow") == "1")

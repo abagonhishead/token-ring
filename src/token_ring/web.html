@@ -188,6 +188,7 @@ input:disabled, select:disabled { opacity: .65; }
         </form>
         <div id="callers-result" style="margin-top:8px"></div>
       </div></div>
+      <div class="card" id="lines-card" hidden><h2>Session lines</h2><div class="body"><table id="lines"></table></div></div>
       <div class="card"><h2>Services</h2><div class="body"><table id="services"></table></div></div>
       <div class="card"><h2>Calls &amp; voicemail</h2><div class="body" id="calls"></div></div>
       <div class="card"><h2>Dialplan</h2><div class="body"><table id="dialplan"></table></div></div>
@@ -332,24 +333,51 @@ function extInfo(e, ports) {
   let label = e.steps.find(s => !/^(Answer|Progress|Playtones|Wait|StopPlaytones|GotoIf|ExecIf|Gosub|NoOp|Set|Hangup)$/.test(s.app))?.app || "";
   let port = null;
   const a = /AudioSocket\/[\d.]+:(\d+)/.exec(apps);
-  if (a) { port = +a[1]; const p = ports.find(p => p.port === port); label = p ? p.name.replace(/\s*\(.*\)/, "") : `bridge ${port}`; }
+  if (a) { port = +a[1]; const p = ports.find(p => p.port === port); label = p ? p.name.replace(/\s*\(.*\)/, "") : `bridge ${port}`;
+           if (/Line: /.test(apps)) label = "session lines"; }
   else if (/Echo\(/.test(apps)) label = "audio echo";
   else if (/outgoing/.test(apps)) label = "ring-back test";
   else if (/Dial\(PJSIP\/\$\{EXTEN\}/.test(apps)) label = "dial a phone";
   else if (/^Playback$/.test(label)) label = "plays " + (e.steps.find(s => s.app === "Playback").data.split("/").pop() || "a message");
   return {label, port, only: restricted ? restricted[1] : null, screened: /Gosub\(caller-allowed/.test(apps)};
 }
+// Where an extension's jumps into other contexts lead (Goto(ctx,exten,1), GotoIf(cond?ctx,exten,1:...)),
+// followed a few deep: [{label, port, code}]. A context that waits for keys (WaitExten, Read) and
+// jumps on from an extension there leads on "after a code".
+function branches(e, ports, dialplan, depth = 0) {
+  if (!dialplan || depth > 3) return [];
+  const out = [];
+  for (const step of e.steps.filter(s => /^Goto(If)?$/.test(s.app))) {
+    const targets = step.app === "Goto" ? [step.data] : (step.data.split("?")[1] || "").split(":");
+    for (const t of targets) {
+      const [ctx, ext] = t.split(",").map(x => x.trim());
+      const c = ext && dialplan.find(d => d.context === ctx);
+      const x = c && c.extensions.find(x => x.exten === ext);
+      if (!x) continue;   // (a label in the same extension, or nowhere we know)
+      if (x.steps.some(s => /^(WaitExten|Read)$/.test(s.app))) {
+        c.extensions.filter(y => !["s", "i", "t", "T", "h"].includes(y.exten))
+          .forEach(y => branches(y, ports, dialplan, depth + 1).forEach(b => out.push({...b, code: true})));
+        continue;
+      }
+      const info = extInfo(x, ports);
+      if (info.port != null || info.label) out.push({label: info.label, port: info.port});
+      out.push(...branches(x, ports, dialplan, depth + 1));
+    }
+  }
+  return out.filter((b, i) => out.findIndex(o => o.label === b.label && !!o.code === !!b.code) === i);
+}
+const orBranches = bs => bs.length ? "or " + bs.map(b => b.code ? `${b.label}, after a code` : b.label).join(", or ") : "";
 function renderDiagram(st) {
   const svg = $("#diagram");
   const ports = st.services.bridge;
   const devs = st.endpoints.map(ep => ({ep, c: st.contacts.find(c => c.endpoint === ep.name)}));
   const internal = (st.dialplan.find(d => d.context === "internal") || {extensions: []}).extensions
-    .map(e => ({...e, ...extInfo(e, ports)}));
+    .map(e => ({...e, ...extInfo(e, ports), branches: branches(e, ports, st.dialplan)}));
   // calls in from each trunk: what its context does (not the catch-alls that only hang up)
   const trunks = st.trunks || [];
   const incoming = trunks.flatMap(t => ((st.dialplan.find(d => d.context === t.context) || {extensions: []}).extensions)
     .filter(e => e.steps.some(s => s.app !== "Hangup"))
-    .map(e => ({...e, ...extInfo(e, ports), trunk: t})));
+    .map(e => ({...e, ...extInfo(e, ports), branches: branches(e, ports, st.dialplan), trunk: t})));
   const bridgeUp = ports.every(p => p.up);
   const svc = [
     {t: "Gateway", s: st.services.gateway.detail.replace(/assistant: |host: /g, "") || st.services.gateway.url, up: st.services.gateway.up},
@@ -397,17 +425,18 @@ function renderDiagram(st) {
   const middle = internal.length + incoming.length;
   incoming.forEach((e, i) => {
     const yy = y(internal.length + i, middle);
-    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`, [e.label, e.screened ? "allowed callers only" : ""].map(t => clip(t, 30)));
+    nodes += node(X[2], yy, Wd[2], nodeH, `Calls to ${e.trunk.number}`,
+                  [(e.screened ? "allowed only: " : "") + e.label.replace(/^plays /, ""), orBranches(e.branches)].map(t => clip(t, 30)));
     edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
-    if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
+    if (e.port != null || e.branches.some(b => b.port != null)) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
   });
   internal.forEach((e, i) => {
     const yy = y(i, middle);
     const voices = (ports.find(p => p.port === e.port) || {}).voices || [];
     nodes += node(X[2], yy, Wd[2], nodeH, `${e.exten.replace(/^_/, "")}  ${e.label}`,
-                  [e.only ? `only from ${e.only}` : "", ...voices].filter(Boolean).slice(0, 2).map(t => clip(t, 30)));
+                  [e.only ? `only from ${e.only}` : "", orBranches(e.branches), ...voices].filter(Boolean).slice(0, 2).map(t => clip(t, 30)));
     edges += curve(X[1] + Wd[1], amid(yy + nodeH / 2), X[2], yy + nodeH / 2, "");
-    if (e.port != null) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
+    if (e.port != null || e.branches.some(b => b.port != null)) edges += curve(X[2] + Wd[2], yy + nodeH / 2, X[3], bridgeY + nodeH / 2, bridgeUp ? "ok" : "bad");
   });
   nodes += node(X[3], bridgeY, Wd[3], nodeH, "Bridge", [`${ports.filter(p => p.up).length}/${ports.length} ports up`, `VAD: ${st.services.vad}`], bridgeUp ? "ok" : "bad");
   svc.forEach((s, i) => {
@@ -420,6 +449,11 @@ function renderDiagram(st) {
 }
 function renderTables(st) {
   const subs = st.subscriptions;
+  const lines = (st.sessions || []).filter(s => s.line).sort((a, b) => a.line - b.line);
+  $("#lines-card").hidden = !lines.length;
+  $("#lines").innerHTML = "<tr><th></th><th>Line</th><th>Session</th></tr>" + lines.map(s =>
+    `<tr><td><span class="dot ${s.status === "down" ? "bad" : s.status === "busy" ? "warn" : "ok"}" title="${esc(s.status)}"></span></td>
+     <td class="mono">${esc(s.line)}</td><td>${esc(s.label)}${s.label !== s.key ? ` <span class="muted mono">${esc(s.key)}</span>` : ""}</td></tr>`).join("");
   $("#devices").innerHTML = "<tr><th></th><th>Ext</th><th>Device</th><th>Address</th><th>Security</th><th>Voicemail light</th></tr>" +
     st.endpoints.map(ep => {
       const c = st.contacts.find(c => c.endpoint === ep.name);

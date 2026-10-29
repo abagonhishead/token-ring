@@ -38,6 +38,7 @@ flowchart LR
 | Dial | What |
 |---|---|
 | 200 | The AI. The operator answers: say "connect me to *session*", "new session in *session*" or "list sessions", or press 0 for a numbered list. Or just talk: the operator is an agent too |
+| 3xx | A session's direct line: straight through to it, without the operator. Each session gets a number of its own the first time the gateway sees it (`[gateway] lines`); the web page lists them |
 | 201 | Voicemail: messages sessions have left you (each read in that session's voice); press 2 to leave one for a session |
 | 601 | Speech echo: hear what speech-to-text made of what you said |
 | 602 | Ringback test: hang up after the beep and the PBX rings you back 15 s later (checks calls get through Do Not Disturb) |
@@ -165,6 +166,7 @@ certificate in `./tls`, otherwise plain HTTP):
   sessions, each a voice or a group (a random voice from it each call). **Name unnamed voices**
   plays each voice without a name and suggests a man's or woman's name by how low it sounds. Saving rewrites the
   `[voices]` tables in `config.toml` (keeping the previous file), and new calls use it.
+- **Session lines:** each session's direct line (3xx).
 - **Configuration:** Asterisk's files and token-ring's config, passwords hidden. Switch on
   **Advanced** to edit them: saving keeps the previous version and reloads what changed, and shows
   what Asterisk logged about it.

@@ -196,6 +196,7 @@ class Gateway:
         c = gateway_conf()
         self.data_dir = config.expand(c["data_dir"])
         self.vm_dir = os.path.join(self.data_dir, "voicemail")
+        self.lines_lock = threading.Lock()
         self.backend_conf = None
         self.backend_obj = None
         self.agents = {}            # id -> Conversation
@@ -222,7 +223,32 @@ class Gateway:
             return self.backend_obj
 
     def sessions(self):
-        return [dict(s, label=spoken_label(s["key"])) for s in self.backend.sessions()]
+        sessions = self.backend.sessions()
+        lines = self.lines([s["key"] for s in sessions])
+        return [dict(s, label=spoken_label(s["key"]), line=lines.get(s["key"], "")) for s in sessions]
+
+    def lines(self, keys=()):
+        """{session key: its direct line}: each session gets the next free number in [gateway]
+        lines ("301-399") the first time it's seen, kept in <data_dir>/lines.json so it never
+        changes (a session that's gone keeps its number, in case it comes back)."""
+        first, _, last = str(config.section("gateway").get("lines", "")).partition("-")
+        path = os.path.join(self.data_dir, "lines.json")
+        with self.lines_lock:
+            try:
+                with open(path) as f:
+                    lines = json.load(f)
+            except (OSError, ValueError):
+                lines = {}
+            new = sorted(k for k in keys if k not in lines)
+            if new and first.isdigit() and last.isdigit():
+                free = (str(n) for n in range(int(first), int(last) + 1) if str(n) not in lines.values())
+                for key, number in zip(new, free):
+                    lines[key] = number
+                os.makedirs(self.data_dir, exist_ok=True)
+                with open(path + ".tmp", "w") as f:
+                    json.dump(lines, f, indent=1)
+                os.replace(path + ".tmp", path)
+            return lines
 
     def label(self, key):
         return "the operator" if key == "operator" else spoken_label(key)

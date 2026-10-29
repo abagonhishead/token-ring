@@ -57,6 +57,7 @@ DEFAULTS = {
         "operator_prompt": "",         # appended to the operator's built-in instructions
         "session_prompt": "",          # appended to new phone sessions' instructions
         "text_operator": "200",        # texts to this extension go to the operator ("" for none)
+        "lines": "301-399",            # each session's direct line, from these ("" for none)
     },
     "backends": {},
     "stt": {"engine": "openai"},
