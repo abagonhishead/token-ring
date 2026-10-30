@@ -275,6 +275,8 @@ engine = "off"
         web.write_voices({**v2, "operator": "@nope"})
     with pytest.raises(ValueError):
         web.write_voices({**v2, "rate": 9})
+    with pytest.raises(ValueError, match="two voices are called"):
+        web.write_voices({**v2, "names": {"piper/a": "Sam", "piper/b": " sam "}})
 
 
 def test_splice_table():

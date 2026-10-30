@@ -716,6 +716,11 @@ def check_voices(v):
         if not isinstance(v[k], list) or not all(map(text, v[k])):
             raise ValueError(f"{k}: a list of voices")
     v["names"] = {k: " ".join(x.split()) for k, x in v["names"].items() if text(k) and text(x) and x.strip()}
+    seen = set()
+    for name in v["names"].values():
+        if name.lower() in seen:
+            raise ValueError(f"two voices are called {name}")
+        seen.add(name.lower())
     v["introduce"] = [s for s in dict.fromkeys(v["introduce"]) if s in v["names"]]
     for who, want in [("operator", v["operator"]), ("default", v["default"]), *v["sessions"].items()]:
         if not text(who) or not text(want):
@@ -779,11 +784,21 @@ PITCH_SPLIT_HZ = 153
 FEMALE_NAMES = """Abigail Ada Alice Amelia Anna Beatrice Bethany Caitlin Charlotte Chloe Clara Daisy
 Eleanor Eliza Ellie Emily Erin Esme Evie Fiona Florence Freya Georgia Grace Hannah Harriet Holly
 Imogen Isla Ivy Jasmine Jessica Juliet Katie Lily Lucy Lydia Maisie Martha Matilda Megan Millie
-Molly Nancy Niamh Olivia Penny Phoebe Rachel Rosie Ruby Sophie Stella Tilly Violet Willow Zara""".split()
+Molly Nancy Niamh Olivia Penny Phoebe Rachel Rosie Ruby Sophie Stella Tilly Violet Willow Zara
+Agnes Alexandra Alys Amber Annabel Anouk Astrid Audrey Bella Bonnie Bridget Bronwen Carys Cerys Cora
+Delilah Dora Edith Elin Elsie Emma Esther Faith Femke Ffion Frances Freja Gemma Gwen Hazel Heidi
+Ingrid Iris Isabel Jane Jemima Josie Kate Laura Leah Liv Lorna Lottie Mabel Maggie Maria Marnie
+Mary Maya Mia Morwenna Nell Nora Orla Pippa Poppy Primrose Rhiannon Rose Ruth Sadie Sarah Saskia
+Scarlett Sienna Sigrid Siobhan Tabitha Tamsin Tess Thea Una Vera Wendy Winifred""".split()
 MALE_NAMES = """Albert Alfie Angus Archie Arthur Barnaby Ben Callum Charlie Dan Declan Dominic Ed
 Elliot Ewan Felix Finn Fraser Freddie George Gethin Harry Henry Hugh Isaac Jack Jacob Jamie Joe
 Jonah Kit Leo Louis Luke Max Miles Nathan Ned Noah Oliver Oscar Owen Patrick Rhys Robin Rory Rufus
-Sam Seb Stanley Theo Tobias Tom Will Wilf Zach""".split()
+Sam Seb Stanley Theo Tobias Tom Will Wilf Zach
+Aaron Adam Aidan Alex Alistair Anders Bertie Billy Bram Bryn Cai Caleb Cameron Conor Cyril Dafydd
+David Dylan Edmund Edwin Emrys Eric Erik Ernest Evan Frank Gareth Gavin Geraint Gerald Gordon Graham
+Gus Hamish Harvey Huw Ian Idris Iwan Jasper Jim Joel John Joost Jude Keith Kieran Lars Laurence
+Lewis Liam Lloyd Malcolm Mark Matthew Monty Morgan Neil Nick Nigel Nils Percy Peter Pieter Ralph
+Ray Reggie Rob Roger Ross Ryan Sander Simon Steve Sven Ted Terry Toby Tomos Victor Wesley Xander""".split()
 
 
 def suggest_names(voices, taken, rng=None):
@@ -801,7 +816,10 @@ def suggest_names(voices, taken, rng=None):
             continue
         sounds = "male" if 0 < hz < PITCH_SPLIT_HZ else "female"
         pool = [n for n in (MALE_NAMES if sounds == "male" else FEMALE_NAMES) if n.lower() not in used]
-        pool = pool or [n for n in MALE_NAMES + FEMALE_NAMES if n.lower() not in used] or ["Voice"]
+        pool = pool or [n for n in MALE_NAMES + FEMALE_NAMES if n.lower() not in used]
+        if not pool:
+            out[voice] = {"error": "no names left"}
+            continue
         name = rng.choice(pool)
         used.add(name.lower())
         out[voice] = {"name": name, "pitch_hz": round(hz), "sounds": sounds}

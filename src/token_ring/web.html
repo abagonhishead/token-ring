@@ -142,6 +142,7 @@ table.voices td { vertical-align: middle; }
 @media (max-width: 600px) { .acts { flex-direction: column; align-items: stretch; } }
 table.voices tr.off td:not(:nth-child(6)) { opacity: .5; }
 table.voices input.vname { width: 9.5em; }
+table.voices input.vname.dup { border-color: var(--bad); color: var(--bad); }
 table.voices input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 table.voices input.vrate { width: 4.8em; }
 .gtoggle { font: inherit; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line);
@@ -836,9 +837,17 @@ function vzOptions(selected, blank) {
   return `<option value=""${!selected ? " selected" : ""}>${esc(blank)}</option>` +
     (groups ? `<optgroup label="Groups">${groups}</optgroup>` : "") + `<optgroup label="Voices">${voices}</optgroup>`;
 }
+// names given to more than one voice (lower case): those can't be saved
+function vzDups() {
+  const seen = new Set(), dups = new Set();
+  for (const n of Object.values(vz.cfg.names).map(n => n.trim().toLowerCase()).filter(Boolean)) (seen.has(n) ? dups : seen).add(n);
+  return dups;
+}
 function vzChanged() {
-  const dirty = JSON.stringify(vz.cfg) !== vzSaved;
-  $("#vz-savebar").hidden = !dirty;
+  const dirty = JSON.stringify(vz.cfg) !== vzSaved, dups = [...vzDups()];
+  $("#vz-savebar").hidden = !dirty && !dups.length;
+  $("#vz-save").disabled = dups.length > 0;
+  $("#vz-saveinfo").innerHTML = dups.length ? ` <span class="err">Two voices can't share a name: ${esc(dups.join(", "))}</span>` : "";
   return dirty;
 }
 let vzRows = [];   // the voices the list shows
@@ -894,6 +903,7 @@ function renderVoices() {
   $("#vz-count").textContent = `${rows.length} of ${vz.all.length} voices`;
   const dis = edit ? "" : " disabled";
   vzRows = rows;
+  const dups = vzDups();
   // the header's boxes tick or untick every voice shown (Greets: those with names)
   const named = rows.filter(s => c.names[s]);
   const allBox = (id, title, n, of) => `<br><input type="checkbox" id="${id}" title="${title}"${n && n === of ? " checked" : ""}${edit && of ? "" : " disabled"}>`;
@@ -904,7 +914,7 @@ function renderVoices() {
     const rate = c.rates[s] ?? "";
     return `<tr class="${on ? "" : "off"}">
       <td><button class="play" data-play="${esc(s)}" title="Play" aria-label="Play ${esc(vzLabel(s))}">▶</button></td>
-      <td><input type="text" class="vname" data-name="${esc(s)}" value="${esc(c.names[s] || "")}" placeholder="${esc(/\d/.test(v?.speaker || "") ? "" : v?.speaker || "")}"${dis}></td>
+      <td><input type="text" class="vname${dups.has((c.names[s] || "").toLowerCase()) ? " dup" : ""}" data-name="${esc(s)}" value="${esc(c.names[s] || "")}" placeholder="${esc(/\d/.test(v?.speaker || "") ? "" : v?.speaker || "")}"${dis}></td>
       <td><input type="checkbox" data-greet="${esc(s)}" title="Says its name when it starts speaking"${c.introduce.includes(s) ? " checked" : ""}${edit && c.names[s] ? "" : " disabled"}></td>
       <td><span class="mono">${esc(s)}</span><br>${v ? [v.language, v.quality].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("") : '<span class="tag bad">not offered by its engine</span>'}${vz.heard?.[s] ? `<span class="tag" title="its measured pitch">sounds ${esc(vz.heard[s].sounds)}, ${vz.heard[s].pitch_hz} Hz</span>` : ""}</td>
       <td><input type="number" class="vrate" data-rate="${esc(s)}" min="0.3" max="3" step="0.01" value="${esc(rate)}" placeholder="${esc(c.rates[vzModel(s)] ?? c.rate)}"${dis}></td>
