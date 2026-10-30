@@ -1411,6 +1411,39 @@ class Voicemail(Operator):
         await super().on_end()
 
 
+# Presence: each session line has a hint on a device state of its own (extensions.conf:
+# exten => _3XX,hint,Custom:session${EXTEN}), so a phone showing its contacts' presence shows the
+# sessions: free while one waits for you, busy while it's working on something (it can still be
+# called), unavailable when it isn't running.
+SESSION_STATES = {"idle": "NOT_INUSE", "busy": "INUSE"}   # anything else: UNAVAILABLE
+
+
+async def presence_loop():
+    """Keep the session lines' device states up to date, for as long as the bridge runs."""
+    every = bridge_conf()["presence_every_seconds"]
+    have, warned = {}, False
+    while every > 0:
+        try:
+            code, sessions = await asyncio.to_thread(gateway().call, "GET", "/sessions")
+            if code != 200:
+                raise OSError(f"the gateway answered {code}")
+            want = {s["line"]: SESSION_STATES.get(s.get("status"), "UNAVAILABLE") for s in sessions if s.get("line")}
+            want.update({line: "UNAVAILABLE" for line in have.keys() - want.keys()})  # gone
+            for line, state in want.items():
+                if have.get(line) != state:
+                    resp = await ami_action({"Action": "Setvar", "Variable": f"DEVICE_STATE(Custom:session{line})",
+                                             "Value": state})
+                    if resp.get("Response") != "Success":
+                        raise RuntimeError(f"can't set {line}'s state: {resp.get('Message', 'failed')}")
+                    have[line] = state
+            warned = False
+        except Exception as e:
+            if not warned:
+                log.warning("presence: %s", e)
+                warned = True
+        await asyncio.sleep(every)
+
+
 async def main():
     c = bridge_conf()
     servers = [await asyncio.start_server(lambda r, w, cls=cls: cls(r, w).run(), c["host"], c[port])
@@ -1418,7 +1451,7 @@ async def main():
     log.info("listening on %s: echo %d, operator %d, voicemail %d; voice %s, STT %s, gateway %s",
              c["host"], c["echo_port"], c["operator_port"], c["voicemail_port"], voice_for("operator"),
              stt.get().describe(), c["gateway_url"])
-    tasks = [outbound_loop(), text_replies_loop()]
+    tasks = [outbound_loop(), text_replies_loop(), presence_loop()]
     # Call apps: your own Call subclasses, each on its own port ([bridge.apps.<name>] port and
     # class = "module:Class"), with an optional background task (async classmethod background(conf))
     for name, app in c.get("apps", {}).items():

@@ -104,3 +104,9 @@ def test_login_name(tmp_path):
     assert e["proxy_0", "reg_identity"] == "sip:alice@pbx.example.net"
     assert e["proxy_0", "mwi_server_uri"] == "sip:alice@pbx.example.net"
     assert e["auth_info_0", "username"] == e["auth_info_0", "userid"] == "alice"
+
+
+def test_presence_list():
+    e = entries(provision.linphone_xml("100", "pw", {**CONF, "presence_list": "presence"}))
+    assert e["sip", "rls_uri"] == "sip:presence@pbx.example.net"
+    assert ("sip", "rls_uri") not in entries(provision.linphone_xml("100", "pw", CONF))

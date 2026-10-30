@@ -40,6 +40,7 @@ SECRET_KEY = re.compile(r"(secret|password|passwd|token|api_key)$", re.I)
 # What to reload after saving an Asterisk file (anything else: "core reload")
 RELOADS = {
     "pjsip.conf": "module reload res_pjsip.so",
+    "pjsip_presence.conf": "module reload res_pjsip.so",
     "extensions.conf": "dialplan reload",
     "callers.conf": "dialplan reload",
     "cdr.conf": "module reload cdr",
@@ -149,7 +150,8 @@ async def gather_status(conn):
         d = [] if isinstance(d, Exception) else d
         ep = next((x for x in d if x.get("Event") == "EndpointDetail"), {})
         aor = next((x for x in d if x.get("Event") == "AorDetail"), {})
-        identify = [x for x in d if x.get("Event") == "IdentifyDetail"]
+        # (by address: a phone signing in by name has one too, matching its From header)
+        identify = [x for x in d if x.get("Event") == "IdentifyDetail" and x.get("Match")]
         reg = registrations.get(e["ObjectName"])
         if reg or identify:  # a trunk: registers out to a provider, or its calls are known by address
             status = next((x for x in d if x.get("Event") == "ContactStatusDetail"), {})
@@ -836,6 +838,41 @@ def directory_source():
     return phones, voice_sessions()
 
 
+# Presence: a phone that shows its contacts' presence subscribes to one list ([provision]
+# presence_list; Linphone's rls_uri), and Asterisk answers with the state of each extension in it,
+# from its hint (extensions.conf). The list is kept to the phones and the sessions' lines.
+PRESENCE_FILE = "pjsip_presence.conf"   # pjsip.conf includes it
+
+
+def presence_conf(phones, sessions):
+    name = config.section("provision")["presence_list"]
+    items = sorted({ext for ext, _ in phones} | {s["line"] for s in sessions if s.get("line")},
+                   key=lambda x: (len(x), x))
+    head = "; The phones' presence list: the web page writes this file (from the phones and session lines)\n"
+    if not name or not items:
+        return head
+    return (head + f"[{name}]\ntype = resource_list\nevent = presence\nfull_state = yes\n"
+            "notification_batch_interval = 500\n" + "".join(f"list_item = {i}\n" for i in items))
+
+
+def presence_loop(every_s=60):
+    """Keep the presence list up to date (only while the gateway's there: its sessions are in it)."""
+    warned = False
+    while True:
+        try:
+            phones, sessions = directory_source()
+            if sessions:
+                r = save_config("asterisk", PRESENCE_FILE, presence_conf(phones, sessions))
+                if r["changed"]:
+                    log.info("presence list: %d phones and sessions", len(phones) + len(sessions))
+            warned = False
+        except Exception as e:
+            if not warned:
+                log.warning("presence list: %s", e)
+                warned = True
+        time.sleep(every_s)
+
+
 def contacts_host():
     return config.section("provision").get("name") or urllib.parse.urlsplit(contacts.conf()["url"]).hostname or ""
 
@@ -1115,6 +1152,7 @@ def main():
         server.context.load_cert_chain(cert, key)
         scheme = "https"
     threading.Thread(target=rotate_loop, daemon=True).start()
+    threading.Thread(target=presence_loop, daemon=True).start()
     if contacts.enabled():
         threading.Thread(target=contacts.directory_loop, args=(directory_source, contacts_host()), daemon=True).start()
     log.info("web page on %s://%s:%d (no login: keep it to your LAN or VPN)", scheme, c["listen"], c["port"])

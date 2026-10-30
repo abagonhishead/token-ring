@@ -129,6 +129,10 @@ def linphone_xml(ext, password, c, voicemail="", user=None):
     if c.get("media_encryption"):
         sections["sip"] = {"media_encryption": c["media_encryption"],
                            "media_encryption_mandatory": int(bool(c.get("media_encryption_mandatory", True)))}
+    if c.get("presence_list"):
+        # Presence for the contacts: one subscription to the list, which Asterisk answers with the
+        # state of everything in it (Linphone only subscribes for its contacts through a list)
+        sections.setdefault("sip", {})["rls_uri"] = f"sip:{c['presence_list']}@{host}"
     body = "".join(
         f'  <section name="{name}">\n' + "".join(
             f'    <entry name="{k}" overwrite="true">{escape(str(v))}</entry>\n' for k, v in entries.items())

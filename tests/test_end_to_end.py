@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from token_ring import bridge, gateway
+from token_ring import bridge, config, gateway
 from token_ring.audio import FRAME_BYTES, tone
 
 
@@ -255,7 +255,7 @@ def test_voicemail_and_outbound(system):
 
 class FakeAMI:
     """Enough of Asterisk's manager interface for texts: logins, "pjsip show endpoint",
-    MessageSend, MWIUpdate, and UserEvents for texts from the phone."""
+    MessageSend, MWIUpdate, Setvar (device states), and UserEvents for texts from the phone."""
 
     def __init__(self):
         self.reachable = False
@@ -263,6 +263,7 @@ class FakeAMI:
         self.froms = []
         self.listeners = []
         self.mwi = []
+        self.states = []
         self.originated = []
         self.answer = None  # async (Originate message): whoever answers an Originate
 
@@ -294,6 +295,9 @@ class FakeAMI:
                 elif action == "MWIUpdate":
                     self.mwi.append((msg["Mailbox"], int(msg["NewMessages"]), int(msg["OldMessages"])))
                     writer.write(b"Response: Success\r\nMessage: Mailbox updated\r\n\r\n")
+                elif action == "Setvar":
+                    self.states.append((msg["Variable"], msg["Value"]))
+                    writer.write(b"Response: Success\r\nMessage: Variable Set\r\n\r\n")
                 elif action == "Logoff":
                     writer.close()
                     return
@@ -484,4 +488,28 @@ def test_session_line(system):
             await until(said_has(said, "There is no session on line 3 9 9. Goodbye."))
             await until(lambda: c.hung_up)
         assert gw(ports, "GET", "/sessions") == lines   # the numbers stay put
+    asyncio.run(main())
+
+
+def test_presence(system, monkeypatch):
+    """Each session line's device state follows its session: free when idle, busy while working,
+    only sent when it changes."""
+    ports, said, _ = system
+    from token_ring.backends import echo
+    echo._state.clear()
+    monkeypatch.setitem(config.section("bridge"), "presence_every_seconds", 0.1)
+    ami = FakeAMI()
+
+    async def main():
+        await asyncio.start_server(ami.handle, "127.0.0.1", ports["ami"])
+        lines = {s["key"]: s["line"] for s in gw(ports, "GET", "/sessions")}
+        task = asyncio.create_task(bridge.presence_loop())
+        await until(lambda: len(ami.states) == len(lines))
+        assert set(ami.states) == {(f"DEVICE_STATE(Custom:session{line})", "NOT_INUSE") for line in lines.values()}
+        echo.EchoSession("alpha").state()["status"] = "busy"
+        await until(lambda: ami.states[-1] == (f"DEVICE_STATE(Custom:session{lines['alpha']})", "INUSE"))
+        n = len(ami.states)
+        await asyncio.sleep(0.5)
+        assert len(ami.states) == n  # only on changes
+        task.cancel()
     asyncio.run(main())

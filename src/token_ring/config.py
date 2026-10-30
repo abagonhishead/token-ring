@@ -41,6 +41,7 @@ DEFAULTS = {
         "text_from": "201",            # who voicemail texts appear to come from
         "log_file": "",                # also log here (the web page reads it)
         "mailbox": "",                 # for the voicemail light ("": <phone's endpoint>@token-ring)
+        "presence_every_seconds": 5.0, # session lines' presence (Custom:session<line>); 0: off
     },
     "gateway": {
         "host": "127.0.0.1",
@@ -105,6 +106,8 @@ DEFAULTS = {
         "wait_minutes": 10,
         "voicemail": "",               # what the voicemail button dials ("": [bridge] voicemail_extension)
         "names": {},                   # extension -> the account's display name
+        "presence_list": "presence",   # the phones' presence list (pjsip_presence.conf, which the
+                                       # web page keeps); "": none
     },
 }
 

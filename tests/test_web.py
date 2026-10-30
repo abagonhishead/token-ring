@@ -174,7 +174,9 @@ def test_status_splits_trunks_from_phones(conf):
                 return [{"ObjectName": "100", "DeviceState": "Not in use"}, {"ObjectName": "trunk", "DeviceState": "Not in use"}]
             if a == "PJSIPShowEndpoint" and f["Endpoint"] == "100":
                 return [{"Event": "EndpointDetail", "Callerid": '"Phone" <100>', "Context": "internal"},
-                        {"Event": "AuthDetail", "Password": "secret100"}]
+                        {"Event": "AuthDetail", "Password": "secret100"},
+                        # signing in by name: known by its From header, not by address
+                        {"Event": "IdentifyDetail", "Match": "", "MatchHeader": "From: /<sip:alice@/"}]
             if a == "PJSIPShowEndpoint":
                 return [{"Event": "EndpointDetail", "Context": "from-trunk", "Allow": "(alaw)"},
                         {"Event": "AuthDetail", "Password": "secrettrunk"},
@@ -321,3 +323,16 @@ team = ["piper/a", "piper/b", "piper/c"]
     got = web.port_voices(c)
     assert got[1] == ["voice: Ann", "sessions: Ann or b"]
     assert got[2] == got[3] == ["voice: Ann"] and got[4] == ["voice: b"]
+
+
+def test_presence_list(site):
+    base, etc, cfg, reloads = site
+    phones = [("100", "Phone"), ("101", "")]
+    sessions = [{"key": "a", "line": "310"}, {"key": "b", "line": "302"}, {"key": "new", "line": ""}]
+    web.save_config("asterisk", web.PRESENCE_FILE, web.presence_conf(phones, sessions))
+    text = (etc / web.PRESENCE_FILE).read_text()
+    assert "[presence]\ntype = resource_list\nevent = presence\n" in text
+    assert [l for l in text.splitlines() if l.startswith("list_item")] == \
+        ["list_item = 100", "list_item = 101", "list_item = 302", "list_item = 310"]
+    assert reloads == [web.PRESENCE_FILE]
+    assert not web.save_config("asterisk", web.PRESENCE_FILE, web.presence_conf(phones, sessions))["changed"]
