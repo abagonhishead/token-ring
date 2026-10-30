@@ -1,27 +1,22 @@
 # Who may do what (Radicale's rights file: the first section that matches counts).
-# R/r: read collections/items, W/w: write them. The address book is /phones/pbx/: in the phones'
-# home, where CardDAV apps (Linphone among them) look for it.
+# R/r: read collections/items, W/w: write them. The address book is /token-ring/pbx/, and each
+# phone's login has a copy in its own home (/<login>/pbx/), where CardDAV apps look.
 
-# token-ring (the web page) keeps it, and makes the phones' home for it
+# token-ring (the web page) keeps the book and its copies, and makes the logins' homes for them
 [owner]
 user: token-ring
-collection: phones(/.*)?
+collection: .*
 permissions: RrWw
 
-[owner-home]
-user: token-ring
-collection: token-ring
-permissions: RW
-
-# The phones read it
-[phones-home]
-user: phones
-collection: phones
+# Each phone's login reads its own copy
+[phone-home]
+user: .+
+collection: {user}
 permissions: R
 
-[phones-book]
-user: phones
-collection: phones/.+
+[phone-book]
+user: .+
+collection: {user}/[^/]+
 permissions: Rr
 
 # Everyone signed in may look at the top level (for discovery)

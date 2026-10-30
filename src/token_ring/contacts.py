@@ -1,21 +1,20 @@
 """Contacts: address books for the phones, on a CardDAV server (docker/contacts: Radicale).
 
-One address book, "pbx", in the home of the phones' read-only login ([contacts] reader): CardDAV
-apps (Linphone among them) look in the login's home and take the first address book there. The
-web page keeps it as [contacts] owner: people (edited on its Contacts tab, or with any CardDAV
-app as the owner), and the PBX directory (uids pbx-<extension>: the phones, the operator and
-voicemail, and each session's direct line, rewritten as they change). Phones get it with a
-CardDAV sync app such as DAVx5, which puts it in the phone's contacts (Linphone shows those):
-Linphone 6.2's own CardDAV sync signs in for a sync's first request and then gives up when the
-next one asks, so it can't use a book that needs a login. The passwords are in
-[contacts] users_file, one "user:password" line each (Radicale's htpasswd, plain).
+The web page keeps one address book, "pbx", in the home of its login ([contacts] owner): people
+(edited on its Contacts tab, or with any CardDAV app as the owner), and the PBX directory (uids
+pbx-<extension>: the phones, the operator and voicemail, and each session's direct line,
+rewritten as they change). Each phone has its own read-only login, and a copy of the book in
+that login's home, where CardDAV apps look: every user in [contacts] users_file except the owner
+(one "user:password" line each, Radicale's htpasswd, plain), so a line added there is a new
+phone's login. Phones get it with a CardDAV sync app such as DAVx5, which puts it in the phone's
+contacts (Linphone shows those): Linphone 6.2's own CardDAV sync signs in for a sync's first
+request and then gives up when the next one asks, so it can't use a book that needs a login.
 
 [contacts]
 url = "https://pbx.example.com:5232"   # the server, as the phones reach it ("": no contacts)
 local_url = "https://127.0.0.1:5232"   # as the web page reaches it (its certificate isn't checked)
 users_file = "/run/secrets/contacts_users"
 owner = "token-ring"
-reader = "phones"
 [contacts.directory]                   # numbers for the directory, beside the phones and sessions
 "200" = "Operator"
 "201" = "Voicemail"
@@ -46,24 +45,32 @@ def enabled():
     return bool(conf().get("url"))
 
 
-def password(user):
+def users():
+    """{user: password} from [contacts] users_file."""
+    out = {}
     try:
         with open(config.expand(conf()["users_file"])) as f:
             for line in f:
                 name, sep, secret = line.strip().partition(":")
-                if sep and name == user:
-                    return secret
+                if sep and name:
+                    out[name] = secret
     except OSError:
         pass
-    return ""
+    return out
 
 
-def book_path():
-    return f"/{conf()['reader']}/{BOOK}/"
+def password(user):
+    return users().get(user, "")
 
 
-def book_url():
-    return conf()["url"].rstrip("/") + book_path()
+def logins():
+    """The phones' logins: everyone but the owner."""
+    return [u for u in users() if u != conf()["owner"]]
+
+
+def book_path(user=None):
+    """The address book: the owner's, or the copy in a phone's login's home."""
+    return f"/{user or conf()['owner']}/{BOOK}/"
 
 
 def server_url():
@@ -97,22 +104,34 @@ MKCOL = """<?xml version="1.0" encoding="utf-8"?>
 </prop></set></mkcol>"""
 
 
-def ensure_book():
-    """Make the address book (and the phones' home it's in) if it isn't there yet."""
-    home = f"/{conf()['reader']}/"
+def ensure_book(user=None):
+    """Make the address book (and the home it's in) if it isn't there yet."""
+    home = f"/{user or conf()['owner']}/"
     if request("PROPFIND", home, headers={"Depth": "0"})[0] == 404:
         code, body = request("MKCOL", home)
         if code not in (200, 201):
             raise OSError(f"can't make {home}: {code} {body[:200]!r}")
-    if request("PROPFIND", book_path(), headers={"Depth": "0"})[0] == 404:
-        code, body = request("MKCOL", book_path(), MKCOL.format(name=BOOK_NAME), {"Content-Type": "application/xml"})
+    if request("PROPFIND", book_path(user), headers={"Depth": "0"})[0] == 404:
+        code, body = request("MKCOL", book_path(user), MKCOL.format(name=BOOK_NAME), {"Content-Type": "application/xml"})
         if code not in (200, 201):
             raise OSError(f"can't make the address book: {code} {body[:200]!r}")
+        if not user:
+            adopt()
 
 
-def cards():
-    """{uid: vCard text} in the address book."""
-    code, body = request("GET", book_path())
+def adopt():
+    """A new owner's book takes in the people in the phones' logins' books (an install from before
+    each phone had its own copy kept them there), before mirror() makes those match it."""
+    for login in logins():
+        if request("PROPFIND", book_path(login), headers={"Depth": "0"})[0] < 400:
+            for uid, text in cards(book_path(login)).items():
+                if not uid.startswith(DIRECTORY):
+                    put(uid, text)
+
+
+def cards(path=None):
+    """{uid: vCard text} in the address book (or the one at path)."""
+    code, body = request("GET", path or book_path())
     if code != 200:
         raise OSError(f"can't read the address book: {code}")
     out = {}
@@ -123,17 +142,36 @@ def cards():
     return out
 
 
-def put(uid, text):
-    code, body = request("PUT", f"{book_path()}{urllib.parse.quote(uid)}.vcf", text,
+def put(uid, text, path=None):
+    code, body = request("PUT", f"{path or book_path()}{urllib.parse.quote(uid)}.vcf", text,
                          {"Content-Type": "text/vcard; charset=utf-8"})
     if code not in (200, 201, 204):
         raise OSError(f"can't save the contact: {code} {body[:200]!r}")
 
 
-def delete(uid):
-    code, _ = request("DELETE", f"{book_path()}{urllib.parse.quote(uid)}.vcf")
+def delete(uid, path=None):
+    code, _ = request("DELETE", f"{path or book_path()}{urllib.parse.quote(uid)}.vcf")
     if code not in (200, 204, 404):
         raise OSError(f"can't delete the contact: {code}")
+
+
+def mirror():
+    """Copy the address book to each phone's login; returns how many cards changed."""
+    texts = cards()
+    want = {uid: parse(text) for uid, text in texts.items()}
+    changed = 0
+    for user in logins():
+        ensure_book(user)
+        path = book_path(user)
+        have = cards(path)
+        for uid, parsed in want.items():
+            if uid not in have or parse(have[uid]) != parsed:
+                put(uid, texts[uid], path)
+                changed += 1
+        for uid in set(have) - set(want):
+            delete(uid, path)
+            changed += 1
+    return changed
 
 
 # vCards (4.0): a name, phone numbers (TEL) and SIP addresses (IMPP), which Linphone reads
@@ -250,6 +288,9 @@ def directory_loop(endpoints_and_sessions, host, every_s=60):
                 n = sync_directory(endpoints, sessions, host)
                 if n:
                     log.info("contacts: %d directory entries updated", n)
+            n = mirror()
+            if n:
+                log.info("contacts: %d cards copied to the phones' logins", n)
             warned = False
         except Exception as e:
             if not warned:

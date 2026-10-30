@@ -5,7 +5,8 @@
 #   mkdir -p secrets && openssl rand -hex 32 > secrets/token
 #   write secrets/pjsip_auth.conf (see asterisk/pjsip.conf), secrets/manager_auth.conf (see
 #   asterisk/manager.conf) and config.toml (from config.example.toml)
-#   for contacts: printf 'token-ring:%s\nphones:%s\n' $(openssl rand -hex 16) $(openssl rand -hex 16) > secrets/contacts_users
+#   for contacts: printf 'token-ring:%s\n' $(openssl rand -hex 16) > secrets/contacts_users, then a line
+#     per phone's login: printf 'phone1:%s\n' $(openssl rand -hex 16) >> secrets/contacts_users
 #   the containers run as uid and gid 1000: chown 1000:1000 secrets/* && chmod 640 secrets/*
 #
 #   docker compose up -d                          Asterisk, the bridge and Piper

@@ -50,8 +50,8 @@ def provision_conf():
     return config.section("provision")
 
 
-def get_password(path, ext):
-    """The password in [ext] of an Asterisk auth include."""
+def auth_value(path, ext, key):
+    """A value in [ext] of an Asterisk auth include, or None."""
     section = None
     with open(path) as f:
         for line in f:
@@ -59,10 +59,23 @@ def get_password(path, ext):
             if m:
                 section = m.group(1).strip()
             elif section == ext:
-                m = re.match(r"\s*password\s*=\s*(\S+)", line)
+                m = re.match(rf"\s*{key}\s*=\s*(\S+)", line)
                 if m:
                     return m.group(1)
-    raise SystemExit(f"{path}: no password for [{ext}]")
+    return None
+
+
+def get_password(path, ext):
+    """The password in [ext] of an Asterisk auth include."""
+    password = auth_value(path, ext, "password")
+    if password is None:
+        raise SystemExit(f"{path}: no password for [{ext}]")
+    return password
+
+
+def get_username(path, ext):
+    """The phone's login: the username in [ext] (a name, or the extension)."""
+    return auth_value(path, ext, "username") or ext
 
 
 def set_password(path, ext, password):
@@ -92,22 +105,25 @@ async def reload_and_check(ext, password):
     return any(re.match(rf"\s*password\s*:\s*{re.escape(password)}\s*$", l) for l in out)
 
 
-def linphone_xml(ext, password, c, voicemail=""):
+def linphone_xml(ext, password, c, voicemail="", user=None):
+    """The settings for extension ext, which signs in as user (its auth section's username, and
+    the name of its AOR in pjsip.conf; the extension unless it's a name)."""
+    user = user or ext
     host, transport = c["name"], c["transport"]
     proxy = f"<sip:{host}:{c['sip_port']};transport={transport}>"
     name = c.get("names", {}).get(ext, "").replace('"', "")
-    identity = f'"{name}" <sip:{ext}@{host}>' if name else f"sip:{ext}@{host}"
+    identity = f'"{name}" <sip:{user}@{host}>' if name else f"sip:{user}@{host}"
     sections = {
         "proxy_0": {"reg_proxy": proxy, "reg_route": proxy, "reg_identity": identity,
                     "reg_expires": 3600, "reg_sendregister": 1,
                     # the voicemail light: subscribe to this extension's mailbox (pjsip.conf)
-                    "mwi_server_uri": f"sip:{ext}@{host}",
+                    "mwi_server_uri": f"sip:{user}@{host}",
                     # and the app's voicemail button dials this
                     **({"voicemail_uri": f"sip:{voicemail}@{host}"} if voicemail else {}),
                     # Asterisk can't wake the app with a push notification: stay registered instead
                     "push_notification_allowed": 0, "remote_push_notification_allowed": 0},
         "app": {"keep_service_alive": 1, "auto_start": 1},
-        "auth_info_0": {"username": ext, "userid": ext, "passwd": password, "domain": host},
+        "auth_info_0": {"username": user, "userid": user, "passwd": password, "domain": host},
         "misc": {"transient_provisioning": 1},  # apply once, then forget the address
     }
     if c.get("media_encryption"):
@@ -190,7 +206,8 @@ def main(argv=None):
     print(f"\nOpen on the phone:  {base}/{token}\n"
           f"or in Linphone:     linphone-config:{base}/{token}/linphone.xml\n", flush=True)
     voicemail = c.get("voicemail") or config.section("bridge").get("voicemail_extension", "")
-    if serve(ext, linphone_xml(ext, password, c, voicemail), token, base, c["listen"], c["port"], context,
+    user = get_username(config.expand(c["auth_file"]), ext)
+    if serve(ext, linphone_xml(ext, password, c, voicemail, user), token, base, c["listen"], c["port"], context,
              c["wait_minutes"] * 60):
         log.info("done: the phone has its settings")
     else:

@@ -28,7 +28,8 @@ header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-
          display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 10px 20px; }
 header h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
 header .sub { color: var(--muted); font-size: 13px; }
-nav { display: flex; gap: 4px; }
+nav { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }   /* tabs wrap on a phone rather than widening the page */
+@media (max-width: 600px) { header { padding: 8px 12px; gap: 6px 12px; } main { padding: 12px; } nav button { padding: 6px 9px; } }
 nav button { border: 0; background: none; color: var(--muted); padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
 nav button.on { background: var(--code); color: var(--ink); font-weight: 600; }
 .spacer { flex: 1; }
@@ -137,6 +138,8 @@ button.btn:disabled { opacity: .5; cursor: default; }
 .group-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .group-head strong { font-family: var(--mono); font-size: 13px; }
 table.voices td { vertical-align: middle; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+@media (max-width: 600px) { .acts { flex-direction: column; align-items: stretch; } }
 table.voices tr.off td:not(:nth-child(6)) { opacity: .5; }
 table.voices input.vname { width: 9.5em; }
 table.voices input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
@@ -838,6 +841,7 @@ function vzChanged() {
   $("#vz-savebar").hidden = !dirty;
   return dirty;
 }
+let vzRows = [];   // the voices the list shows
 function renderVoices() {
   if (!vz) return;
   const c = vz.cfg, edit = adv.checked;
@@ -889,7 +893,13 @@ function renderVoices() {
   });
   $("#vz-count").textContent = `${rows.length} of ${vz.all.length} voices`;
   const dis = edit ? "" : " disabled";
-  $("#vz-list").innerHTML = rows.length ? `<tr><th></th><th>Name</th><th title="Says its name when it starts speaking: “Hi, it's Poppy”">Greets</th><th>Voice</th><th>Rate</th><th>On</th><th>Groups</th><th>Used by</th></tr>` + rows.map(s => {
+  vzRows = rows;
+  // the header's boxes tick or untick every voice shown (Greets: those with names)
+  const named = rows.filter(s => c.names[s]);
+  const allBox = (id, title, n, of) => `<br><input type="checkbox" id="${id}" title="${title}"${n && n === of ? " checked" : ""}${edit && of ? "" : " disabled"}>`;
+  $("#vz-list").innerHTML = rows.length ? `<tr><th></th><th>Name</th><th title="Says its name when it starts speaking: “Hi, it's Poppy”">Greets${
+      allBox("vz-all-greet", "All the named voices shown", named.filter(s => c.introduce.includes(s)).length, named.length)}</th><th>Voice</th><th>Rate</th><th>On${
+      allBox("vz-all-on", "All the voices shown", rows.filter(vzOn).length, rows.length)}</th><th>Groups</th><th>Used by</th></tr>` + rows.map(s => {
     const v = vz.byId[s], on = vzOn(s), used = vzUsedBy(s);
     const rate = c.rates[s] ?? "";
     return `<tr class="${on ? "" : "off"}">
@@ -902,6 +912,9 @@ function renderVoices() {
       <td>${names.map(g => `<button class="gtoggle${c.groups[g].includes(s) ? " on" : ""}" data-group="${esc(g)}" data-spec="${esc(s)}"${dis}>${esc(g)}</button>`).join("") || '<span class="muted">—</span>'}</td>
       <td class="muted">${esc(used.map(k => labels[k] || k).join(", "))}</td></tr>`;
   }).join("") : '<tr><td class="muted">No voices match.</td></tr>';
+  const some = (id, n, of) => { const b = $("#" + id); if (b) b.indeterminate = n > 0 && n < of; };
+  some("vz-all-greet", named.filter(s => c.introduce.includes(s)).length, named.length);
+  some("vz-all-on", rows.filter(vzOn).length, rows.length);
   document.querySelectorAll("#voices select[data-who], #voices select[data-session], #vz-rate").forEach(el => el.disabled = !edit);
   $("#vz-autoname").hidden = !edit;
   $("#vz-autoname").disabled = vz.naming || !vz.all.some(s => vz.byId[s] && !c.names[s]);
@@ -910,7 +923,15 @@ function renderVoices() {
 function vzEdit(fn) { fn(vz.cfg); renderVoices(); }
 $("#voices").addEventListener("change", e => {
   const t = e.target, d = t.dataset;
-  if (d.who) vzEdit(c => c[d.who] = t.value);
+  if (t.id === "vz-all-on") vzEdit(c => {
+    const shown = new Set(vzRows);
+    c.disabled = t.checked ? c.disabled.filter(x => !shown.has(x)) : [...new Set([...c.disabled, ...vzRows])];
+  });
+  else if (t.id === "vz-all-greet") vzEdit(c => {
+    const named = vzRows.filter(s => c.names[s]), shown = new Set(named);
+    c.introduce = t.checked ? [...new Set([...c.introduce, ...named])] : c.introduce.filter(x => !shown.has(x));
+  });
+  else if (d.who) vzEdit(c => c[d.who] = t.value);
   else if (d.session !== undefined) vzEdit(c => c.sessions[d.session] = t.value);
   else if (t.id === "vz-rate") vzEdit(c => c.rate = +t.value || 1);
   else if (d.name) vzEdit(c => {
@@ -1029,26 +1050,32 @@ function renderContacts() {
   }
   document.querySelectorAll("#contacts .card:not(.note)").forEach(c => c.hidden = false);
   $("#ct-note").innerHTML = ct.error ? `<span class="err">Can't reach the contacts server: ${esc(ct.error)}</span>` :
-    `Phones read this address book (your contacts and the PBX directory) with one read-only login, through a CardDAV sync app such as
-     DAVx5, which puts it in the phone's contacts (where Linphone looks; Linphone's own CardDAV sync can't sign in). In DAVx5, add an
-     account with "URL and username":
-     <table style="margin-top:6px;width:auto"><tr><td class="muted">Base URL</td><td class="mono">${esc(ct.url)}</td></tr>
-     <tr><td class="muted">Username</td><td class="mono">${esc(ct.reader)}</td></tr>
-     <tr><td class="muted">Password</td><td><span class="mono" id="ct-pw">••••••</span> <button class="btn" id="ct-pwshow" type="button">Show</button></td></tr>
+    `Each phone reads this address book (your contacts and the PBX directory) with its own read-only login, through a CardDAV sync
+     app such as DAVx5, which puts it in the phone's contacts (where Linphone looks; Linphone's own CardDAV sync can't sign in). In
+     DAVx5, add an account with "URL and username", base URL <span class="mono">${esc(ct.url)}</span>, and the phone's login:
+     <table style="margin-top:6px;width:auto"><tr><th>Username</th><th>Password</th></tr>${(ct.logins || []).map((l, i) =>
+       `<tr><td class="mono">${esc(l.user)}</td><td><span class="mono" id="ct-pw${i}">••••••</span>
+        <button class="btn" data-ctpw="${i}" type="button">Show</button></td></tr>`).join("") ||
+       '<tr><td class="muted" colspan="2">None yet: add a "login:password" line for each phone to the contacts_users secret.</td></tr>'}
      </table>` +
     (edit ? "" : ' <span class="muted">Switch on Advanced to change contacts.</span>');
-  const show = $("#ct-pwshow");
-  if (show) show.onclick = () => { const on = show.textContent === "Show"; $("#ct-pw").textContent = on ? ct.reader_password : "••••••"; show.textContent = on ? "Hide" : "Show"; };
+  document.querySelectorAll("[data-ctpw]").forEach(b => b.onclick = () => {
+    const on = b.textContent === "Show";
+    $("#ct-pw" + b.dataset.ctpw).textContent = on ? ct.logins[b.dataset.ctpw].password : "••••••";
+    b.textContent = on ? "Hide" : "Show";
+  });
   if (ct.error) return;
   $("#ct-import").hidden = $("#ct-new").hidden = !edit;
   if (!edit) $("#ct-form").hidden = true;
   const q = $("#ct-filter").value.trim().toLowerCase();
   const people = ct.people.filter(p => !q || [p.name, ...p.tels, ...p.sips, p.note].join(" ").toLowerCase().includes(q));
   $("#ct-count").textContent = `${ct.people.length} contact${ct.people.length === 1 ? "" : "s"}`;
-  $("#ct-people").innerHTML = people.length ? "<tr><th>Name</th><th>Numbers</th><th>SIP</th><th>Note</th><th></th></tr>" + people.map(p =>
+  // columns nobody uses are left out, so the table fits a phone
+  const sips = people.some(p => p.sips.length), notes = people.some(p => p.note);
+  $("#ct-people").innerHTML = people.length ? `<tr><th>Name</th><th>Numbers</th>${sips ? "<th>SIP</th>" : ""}${notes ? "<th>Note</th>" : ""}${edit ? "<th></th>" : ""}</tr>` + people.map(p =>
     `<tr><td>${esc(p.name)}</td><td class="mono">${p.tels.map(t => esc(ctDial(t))).join("<br>")}</td>
-     <td class="mono">${p.sips.map(s => esc(s.replace(/^sip:/, ""))).join("<br>")}</td><td class="muted">${esc(p.note)}</td>
-     <td style="text-align:right;white-space:nowrap">${edit ? `<button class="btn" data-ctedit="${esc(p.uid)}">Edit</button> <button class="btn danger" data-ctdel="${esc(p.uid)}">Delete</button>` : ""}</td></tr>`).join("")
+     ${sips ? `<td class="mono">${p.sips.map(s => esc(s.replace(/^sip:/, ""))).join("<br>")}</td>` : ""}${notes ? `<td class="muted">${esc(p.note)}</td>` : ""}
+     ${edit ? `<td><span class="acts"><button class="btn" data-ctedit="${esc(p.uid)}">Edit</button><button class="btn danger" data-ctdel="${esc(p.uid)}">Delete</button></span></td>` : ""}</tr>`).join("")
     : `<tr><td class="muted">${ct.people.length ? "No contacts match." : "No contacts yet."}</td></tr>`;
   $("#ct-directory").innerHTML = ct.directory.length ? "<tr><th>Name</th><th>Dial</th><th>What</th></tr>" + ct.directory.map(d =>
     `<tr><td>${esc(d.name)}</td><td class="mono">${esc((d.sips[0] || "").replace(/^sip:/, "").split("@")[0])}</td><td class="muted">${esc(d.note.replace(/^Extension \d+ \((.*)\)$/, "$1"))}</td></tr>`).join("")

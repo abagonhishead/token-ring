@@ -89,7 +89,6 @@ DEFAULTS = {
         "local_url": "https://127.0.0.1:5232",
         "users_file": "/run/secrets/contacts_users",
         "owner": "token-ring",
-        "reader": "phones",
         "directory": {"200": "Operator", "201": "Voicemail"},
     },
     "provision": {

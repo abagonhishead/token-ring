@@ -21,7 +21,7 @@ def server(conf, tmp_path):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     users = tmp_path / "users"
-    users.write_text("token-ring:ownerpw\nphones:readpw\n")
+    users.write_text("token-ring:ownerpw\nphones:readpw\ndesk:deskpw\n")
     cfg = tmp_path / "radicale.conf"
     cfg.write_text(open(os.path.join(ROOT, "docker/contacts/config")).read()
                    .replace("/run/secrets/contacts_users", str(users))
@@ -71,6 +71,13 @@ def test_contacts_and_directory(server):
     assert [p["name"] for p in contacts.people()] == ["Bob"]   # people and the directory kept apart
     assert contacts.sync_directory([("100", "Phone")], [], "pbx.example.com") == 1      # the line's gone
 
+    # each phone's login gets a copy, in its own home
+    assert contacts.logins() == ["phones", "desk"]
+    assert contacts.mirror() == 8 and contacts.mirror() == 0
+    contacts.delete(contacts.people()[0]["uid"])
+    assert contacts.mirror() == 2
+    assert all("FN:Bob" not in t for t in contacts.cards("/desk/pbx/").values())
+
     # the phones' login reads, but can't write
     import base64
     def as_phones(method, path, body=None):
@@ -85,15 +92,17 @@ def test_contacts_and_directory(server):
     query = b"""<?xml version="1.0" encoding="utf-8"?>
 <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
 <D:prop><C:address-data/></D:prop>
-<C:filter><C:prop-filter name="FN"><C:text-match match-type="contains">bo</C:text-match></C:prop-filter></C:filter>
+<C:filter><C:prop-filter name="FN"><C:text-match match-type="contains">pho</C:text-match></C:prop-filter></C:filter>
 </C:addressbook-query>"""
     req = urllib.request.Request(server + "/phones/pbx/", data=query, method="REPORT",
                                  headers={"Authorization": "Basic " + base64.b64encode(b"phones:readpw").decode(),
                                           "Depth": "1", "Content-Type": "application/xml"})
     found = urllib.request.urlopen(req, timeout=5).read().decode()
-    assert "FN:Bob" in found
+    assert "FN:Phone" in found
     assert as_phones("PUT", "/phones/pbx/evil.vcf", contacts.card("Evil", ["1"]).encode()) == 403
     assert as_phones("DELETE", "/phones/pbx/") == 403 and as_phones("MKCOL", "/phones/other/") == 403
+    # and only its own copy
+    assert as_phones("GET", "/desk/pbx/") == 403 and as_phones("GET", "/token-ring/pbx/") == 403
 
     # Linphone's sync: the login's principal, its address book home, the first address book there
     def propfind(path, prop, depth="0"):
@@ -109,3 +118,13 @@ def test_contacts_and_directory(server):
     listing = propfind(home, "<d:resourcetype/><d:displayname/>", depth="1")
     assert (principal, home) == ("/phones/", "/phones/") and "/phones/pbx/" in listing and "addressbook" in listing
 
+
+
+def test_upgrade_keeps_the_phones_people(server):
+    """From before each phone had its own copy: the people were in the phones' login's book."""
+    contacts.ensure_book("phones")
+    contacts.put("old-1", contacts.card("Old Friend", ["07700900123"], uid="old-1"), "/phones/pbx/")
+    contacts.ensure_book()
+    assert [p["name"] for p in contacts.people()] == ["Old Friend"]
+    contacts.mirror()
+    assert "old-1" in contacts.cards("/phones/pbx/") and "old-1" in contacts.cards("/desk/pbx/")

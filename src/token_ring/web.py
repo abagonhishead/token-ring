@@ -826,10 +826,10 @@ def contacts_view():
     if not contacts.enabled():
         return {"enabled": False}
     contacts.ensure_book()
-    c = contacts.conf()
     people, directory = contacts.split()
-    return {"enabled": True, "people": people, "directory": directory, "url": contacts.server_url(), "reader": c["reader"],
-            "reader_password": contacts.password(c["reader"])}
+    users = contacts.users()
+    return {"enabled": True, "people": people, "directory": directory, "url": contacts.server_url(),
+            "logins": [{"user": u, "password": users[u]} for u in contacts.logins()]}
 
 
 # The server
@@ -934,6 +934,7 @@ class Handler(BaseHTTPRequestHandler):
         if urllib.parse.urlsplit(self.path).path == "/api/contacts":
             try:
                 uid = contacts.save(self.body().get("contact") or {})
+                contacts.mirror()
                 return self.reply(200, {"uid": uid, **contacts_view()})
             except ValueError as e:
                 return self.reply(400, {"error": str(e)})
@@ -985,6 +986,7 @@ class Handler(BaseHTTPRequestHandler):
                 if uid.startswith(contacts.DIRECTORY):
                     return self.reply(400, {"error": "the directory is kept by the PBX"})
                 contacts.delete(uid)
+                contacts.mirror()
                 return self.reply(200, contacts_view())
             if path == "/api/contacts/import-callers":
                 have = {re.sub(r"\D", "", t) for p in contacts.people() for t in p["tels"]}
@@ -993,6 +995,7 @@ class Handler(BaseHTTPRequestHandler):
                     if re.sub(r"\D", "", c["number"]) not in have:
                         contacts.save({"name": c["name"] or c["number"], "tels": [c["number"]]})
                         added += 1
+                contacts.mirror()
                 return self.reply(200, {"added": added, **contacts_view()})
             if path == "/api/voices/names":
                 b = self.body()

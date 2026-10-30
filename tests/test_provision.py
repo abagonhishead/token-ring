@@ -94,3 +94,13 @@ def test_linphone_xml_name_and_voicemail():
     assert e["proxy_0", "reg_identity"] == '"My PBX" <sip:100@pbx.example.net>'
     assert e["proxy_0", "voicemail_uri"] == "sip:201@pbx.example.net"
     assert e["proxy_0", "mwi_server_uri"] == "sip:100@pbx.example.net"
+
+
+def test_login_name(tmp_path):
+    f = tmp_path / "pjsip_auth.conf"
+    f.write_text("[100](auth-template)\nusername = alice\npassword = pw\n\n[101](auth-template)\npassword = pw2\n")
+    assert provision.get_username(f, "100") == "alice" and provision.get_username(f, "101") == "101"
+    e = entries(provision.linphone_xml("100", "pw", CONF, "", "alice"))
+    assert e["proxy_0", "reg_identity"] == "sip:alice@pbx.example.net"
+    assert e["proxy_0", "mwi_server_uri"] == "sip:alice@pbx.example.net"
+    assert e["auth_info_0", "username"] == e["auth_info_0", "userid"] == "alice"
