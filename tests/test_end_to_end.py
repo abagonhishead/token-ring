@@ -254,7 +254,7 @@ def test_voicemail_and_outbound(system):
 
 
 class FakeAMI:
-    """Enough of Asterisk's manager interface for texts: logins, "pjsip show contacts",
+    """Enough of Asterisk's manager interface for texts: logins, "pjsip show endpoint",
     MessageSend, MWIUpdate, and UserEvents for texts from the phone."""
 
     def __init__(self):
@@ -277,9 +277,11 @@ class FakeAMI:
                     writer.write(b"Response: Success\r\n\r\n" if ok else b"Response: Error\r\nMessage: Authentication failed\r\n\r\n")
                     if ok and msg.get("Events") == "user":
                         self.listeners.append(writer)
-                elif action == "Command":
-                    contact = (b"Output:  Contact:  100/sip:100@10.0.0.5:5060  1a2b3c  Avail  12.3\r\n"
-                               if self.reachable else b"Output: No objects found.\r\n")
+                elif action == "Command":   # pjsip show endpoint 100 (its AOR named after its login)
+                    assert msg["Command"] == "pjsip show endpoint 100"
+                    contact = (b"Output:  Contact:  alice/sip:alice@10.0.0.5:5060  1a2b3c  Avail  12.3\r\n"
+                               if self.reachable else
+                               b"Output:  Contact:  <Aor/ContactUri....> <Hash....> <Status> <RTT(ms)..>\r\n")
                     writer.write(b"Response: Success\r\nMessage: Command output follows\r\n" + contact + b"\r\n")
                 elif action == "MessageSend":
                     self.sent.append(base64.b64decode(msg["Base64Body"]).decode())

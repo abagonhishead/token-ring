@@ -281,9 +281,10 @@ async def ami_list(fields, timeout=10, login=None):
 
 
 async def reachable(endpoint):
-    """Whether a PJSIP endpoint has a registered contact that answers its qualify checks."""
-    out = (await ami_action({"Action": "Command", "Command": "pjsip show contacts"}))["Output"]
-    return any(re.match(rf"\s*Contact:\s+{re.escape(endpoint)}/\S+\s+\S+\s+(Avail|NonQual)\b", l) for l in out)
+    """Whether a PJSIP endpoint has a registered contact that answers its qualify checks (on any of
+    its AORs, which needn't be named after it: a phone signing in by name)."""
+    out = (await ami_action({"Action": "Command", "Command": f"pjsip show endpoint {endpoint}"}))["Output"]
+    return any(re.match(r"\s*Contact:\s+\S+/\S+\s+\S+\s+(Avail|NonQual)\b", l) for l in out)
 
 
 async def send_text(text_id, text, sender=None):
