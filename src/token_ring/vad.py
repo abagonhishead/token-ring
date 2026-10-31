@@ -11,6 +11,11 @@ near_db = 12                       # once the caller's voice level is known (fro
                                    # quieter: a TV or people further away don't (0: off)
 min_level_db = -100                # and never anything quieter than this (dBFS). The bridge logs
                                    # each utterance's level: set it between your voice and the TV
+noise_rise_db = 0                  # how fast the background level may rise (dB a second), so the
+                                   # start of speech the detector isn't sure of yet doesn't raise
+                                   # it (0: as fast as it falls)
+record_dir = ""                    # save each utterance as a WAV here, with the 2 s before it, to
+record_keep = 200                  # hear what the phone sent; the newest record_keep are kept
 
 Another engine is a VAD subclass named as the engine ("module:Class") or registered as a
 token_ring.vad entry point.

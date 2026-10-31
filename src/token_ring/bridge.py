@@ -26,6 +26,7 @@ AudioSocket framing: 1 byte kind, 2 bytes big-endian length, payload.
 """
 import asyncio
 import base64
+import collections
 import logging
 import os
 import re
@@ -35,7 +36,7 @@ import urllib.parse
 import uuid
 
 from . import config, plugins, spotter, stt, tts, vad
-from .audio import FRAME_BYTES, FRAME_MS, RATE, frame_db, tone
+from .audio import FRAME_BYTES, FRAME_MS, RATE, frame_db, to_wav, tone
 from .http import Client
 from .text import match_session, pronounce, speakable, spoken_when
 from .tts import persona, voice_for
@@ -48,9 +49,10 @@ ECHO_GREETING = "Hello. Say something, and I'll tell you what I heard."
 START_DB = 15        # dB above the noise floor that counts as speech
 START_FRAMES = 3     # consecutive loud frames to start an utterance
 END_SILENCE_MS = 700
-PREROLL_MS = 300
+PREROLL_MS = 800      # kept from before an utterance starts: the detector can be slow to be sure
 MIN_SPEECH_MS = 300
 MAX_UTTERANCE_S = 20
+RECORD_BEFORE_S = 2  # [vad] record_dir: also saved, from before each utterance
 REACH_WAIT_S = 15    # texts: how long to wait for a phone that's missed a qualify check
 VOICEMAIL_S = 3.5    # calls to the fallback: talking longer than this when answering is voicemail
 
@@ -451,6 +453,9 @@ class Call:
         self.preroll = []
         self.utterance = None  # bytearray while the caller is speaking
         self.speech_ms = self.silence_ms = 0
+        # [vad] record_dir: the caller's recent audio, to save with each utterance
+        self.history = (collections.deque(maxlen=(MAX_UTTERANCE_S + RECORD_BEFORE_S + 1) * 1000 // FRAME_MS)
+                        if config.section("vad").get("record_dir") else None)
 
     async def send(self, kind, payload=b""):
         self.writer.write(bytes([kind]) + len(payload).to_bytes(2, "big") + payload)
@@ -535,6 +540,8 @@ class Call:
     def hear(self, frame):
         """Feed one 20 ms frame of caller audio to the utterance detector. Caller audio is ignored
         while we're talking or transcribing (no barge-in yet)."""
+        if self.history is not None:
+            self.history.append(frame)
         if self.talking or (self.transcribing and not self.dictating) or time.monotonic() < self.deaf_until:
             self.utterance, self.loud_run = None, 0
             return
@@ -549,7 +556,7 @@ class Call:
                     self.speech_ms, self.silence_ms = self.loud_run * FRAME_MS, 0
             else:
                 self.loud_run, self.level_dbs = 0, []
-                self.noise_db = 0.95 * self.noise_db + 0.05 * db  # track the background level
+                self.track_noise(db)
             return
         self.utterance += frame
         if self.is_speech(frame, db, False):
@@ -564,8 +571,40 @@ class Call:
             self.utterance, self.loud_run, self.preroll, self.level_dbs = None, 0, [], []
             if speech_ms >= MIN_SPEECH_MS:
                 self.transcribing = True
-                self.last_utterance = {"speech_ms": speech_ms, "level": levels[int(len(levels) * 0.9)]}
+                self.last_utterance = {"speech_ms": speech_ms, "level": levels[int(len(levels) * 0.9)],
+                                       "file": self.record(len(pcm)) if self.history is not None else None}
                 asyncio.create_task(self.heard(pcm))
+
+    def track_noise(self, db):
+        """Follow the background level (from what isn't speech): down as fast as it goes, and up by
+        at most [vad] noise_rise_db a second, so the start of speech the detector isn't sure of yet
+        doesn't raise it."""
+        new = 0.95 * self.noise_db + 0.05 * db
+        rise = config.section("vad").get("noise_rise_db", 0)
+        if rise and new > self.noise_db:
+            new = min(new, self.noise_db + rise * FRAME_MS / 1000)
+        self.noise_db = new
+
+    def record(self, nbytes):
+        """[vad] record_dir: save what the caller sent for the utterance just heard (its last
+        nbytes), with the RECORD_BEFORE_S before it, as a WAV; the newest record_keep are kept."""
+        conf = config.section("vad")
+        d = config.expand(conf["record_dir"])
+        frames = list(self.history)[-(nbytes // FRAME_BYTES + RECORD_BEFORE_S * 1000 // FRAME_MS):]
+        now = time.time()
+        path = os.path.join(d, f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now * 1000) % 1000:03d}"
+                               f"-{self.uuid[:8]}.wav")
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(to_wav(b"".join(frames)))
+            saved = sorted(n for n in os.listdir(d) if n.endswith(".wav"))
+            for n in saved[:max(0, len(saved) - conf.get("record_keep", 200))]:
+                os.remove(os.path.join(d, n))
+            return path
+        except OSError as e:
+            log.warning("%s can't save the utterance: %s", self.uuid, e)
+            return None
 
     def is_speech(self, frame, db, starting):
         """Speech by the detector ([vad]), loud enough ([vad] min_level_db), and near the caller's
@@ -596,9 +635,10 @@ class Call:
     async def heard(self, pcm):
         utterance = getattr(self, "last_utterance", {"speech_ms": 0, "level": None})
         try:
-            log.info("%s utterance: %.1f s, level %.0f dB (noise %.0f dB, voice %s)", self.uuid,
+            log.info("%s utterance: %.1f s, level %.0f dB (noise %.0f dB, voice %s)%s", self.uuid,
                      len(pcm) / 2 / RATE, utterance["level"] or 0, self.noise_db,
-                     "unknown" if self.voice_db is None else f"{self.voice_db:.0f} dB")
+                     "unknown" if self.voice_db is None else f"{self.voice_db:.0f} dB",
+                     f", saved as {os.path.basename(utterance['file'])}" if utterance.get("file") else "")
             try:
                 text, took = await asyncio.get_running_loop().run_in_executor(None, transcribe, pcm)
             except Exception as e:  # network or engine failure: say so rather than go quiet
@@ -1160,12 +1200,14 @@ class Operator(Call):
     async def on_dtmf(self, digit):
         log.info("%s key %s: dialog %s, menu %s, queued %d", self.uuid, digit,
                  self.dialog and self.dialog["kind"], bool(self.menu), self.queue.qsize())
+        if (digit in "0*" and self.dialog and self.rereading and time.monotonic() - self.rereading < 3
+                and self.talking):
+            await self.play(TICK)
+            return  # the question's already starting again; another press would only restart it
+        self.hush()  # any key cuts short what's being said, and what it does is said straight away
         await self.play(TICK)
         if digit in "0*" and self.dialog:  # 0: the question again; *: the instructions
-            if self.rereading and time.monotonic() - self.rereading < 3 and self.talking:
-                return  # already starting; another press would only restart it
             self.rereading = time.monotonic()
-            self.hush()
             d = self.dialog
             if digit == "*" and d["kind"] in ("question", "multi"):
                 self.say(self.instructions(d), "dialog")
@@ -1175,7 +1217,6 @@ class Operator(Call):
             await self.read_menu()
         elif digit == "#":
             if self.dialog and self.dialog["kind"] == "multi":
-                self.hush()
                 await self.press("Tab")  # done ticking: on to the review page
         elif digit == "*":
             await self.interrupt()
@@ -1183,11 +1224,9 @@ class Operator(Call):
             n = int(digit)
             if self.menu:
                 if 1 <= n <= len(self.menu):
-                    self.hush()
                     await self.switch(self.menu[n - 1]["key"])
             elif self.dialog:
                 if any(o == digit for o, _ in self.dialog["options"]):
-                    self.hush()
                     await self.press(digit)
                 else:
                     self.say("That isn't one of the options.", "dialog")

@@ -173,6 +173,11 @@ calls_keep_days = 90                        # the call log (Asterisk's cdr_custo
 engine = "energy"              # "silero" (in the bridge image) ignores noise that isn't speech
 near_db = 12                   # ignore voices this much quieter than the caller's (a TV); 0: off
 min_level_db = -100            # and anything quieter than this; the bridge logs each utterance's level
+noise_rise_db = 0              # the background level may rise at most this fast (dB a second), so
+                               # the start of speech can't raise it; 0: as fast as it falls
+record_dir = ""                # save each utterance as a WAV here, with the 2 s before it: what the
+                               # phone really sent (for checking clipped words); "": don't
+record_keep = 200              # the newest this many are kept
 
 # Setting up a phone by remote provisioning (Linphone): `token-ring-provision 100` gives 100 a new
 # password and serves its settings once over HTTPS (docker compose run --rm provision 100).

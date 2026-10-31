@@ -69,7 +69,8 @@ DEFAULTS = {
         "stop": ["stop", "hang on", "wait", "shush", "quiet"],
         "interrupt": ["cancel that"],
     }},
-    "vad": {"engine": "energy", "model": "", "threshold": 0.5, "near_db": 12, "min_level_db": -100},
+    "vad": {"engine": "energy", "model": "", "threshold": 0.5, "near_db": 12, "min_level_db": -100,
+            "noise_rise_db": 0, "record_dir": "", "record_keep": 200},
     "pronunciations": {},
     "notify": {"via": [], "remind_every_minutes": 60, "preview": True, "preview_chars": 160, "ntfy": {}},
     "web": {
