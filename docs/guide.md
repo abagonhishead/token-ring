@@ -55,8 +55,9 @@ In a session:
 - `*` interrupts the current turn. Saying "stop" or "hang on" while it's speaking cuts the speech;
   "cancel that" also interrupts. Interrupting never cancels background work. Any key also cuts
   the speech short (and does what it does straight away).
-- Saying "hold" puts the call on hold: what's being said pauses (to start that sentence again
-  later), replies wait, and nothing you say is heard, until you say "continue" or press a key.
+- Saying "hold please" puts the call on hold: what's being said pauses (to start that sentence
+  again later), replies wait, and nothing you say is heard, until you say "continue" or press a
+  key. A low double blip every 10 seconds says it's still on hold.
   Handy when you're talking to someone else.
 - Permission prompts are never answered by phone: a command read aloud can't be checked. The call
   tells you where to answer it and hangs up.

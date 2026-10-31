@@ -1,4 +1,4 @@
-"""Hold ("hold" ... "continue") and the ready tone, on an Operator call without a phone."""
+"""Hold ("hold please" ... "continue") and the ready tone, on an Operator call without a phone."""
 import asyncio
 
 from token_ring import bridge
@@ -29,7 +29,7 @@ def test_hold_pauses_and_continue_resumes(conf):
         c.say("One.", "reply")
         c.say("Two.", "reply")
         await asyncio.sleep(0.1)
-        c.on_keyword("hold", "hold")              # mid "One."
+        c.on_keyword("hold", "hold please")              # mid "One."
         await asyncio.sleep(0)
         assert c.held and tones == [bridge.HOLD]
         c.say("Three.", "reply")                  # arrives while on hold: waits
@@ -67,7 +67,10 @@ def test_hold_by_speech_to_text_and_key_ends_it(conf):
     async def main():
         c = operator([], tones)
         c.key = "operator"
-        await c.on_text("Hold.")
+        await c.on_text("Hold.")                  # not the phrase: sent as usual
+        assert not c.held
+        c.hush()
+        await c.on_text("Hold, please.")
         assert c.held
         await c.on_dtmf("5")                      # any key: off hold, and nothing else
         assert not c.held and c.menu is None and c.queue.empty()
@@ -100,3 +103,18 @@ def test_ready_tone(conf):
         pips.cancel()
         speaker.cancel()
     asyncio.run(main())
+
+
+def test_blip_on_hold(conf):
+    conf("[bridge]\nhold_pip_every_seconds = 0.3\npip_every_seconds = 60\n")
+    tones = []
+
+    async def main():
+        c = operator([], tones)
+        pips = asyncio.create_task(c.pip_loop())
+        c.hold()
+        c.last_sound = bridge.time.monotonic()    # (play() would set it)
+        await asyncio.sleep(0.6)
+        pips.cancel()
+    asyncio.run(main())
+    assert tones[0] == bridge.HOLD and bridge.HOLD_PIP in tones[1:] and bridge.PIP not in tones

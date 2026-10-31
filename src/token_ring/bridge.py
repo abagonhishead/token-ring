@@ -64,6 +64,7 @@ ACK = tone(880, 70, gap_ms=60) + tone(1175, 70)
 READY = tone(1175, 70, gap_ms=60) + tone(880, 70)            # ACK backwards: your turn to talk
 HOLD = tone(660, 90, gap_ms=60) + tone(440, 90, gap_ms=60) + tone(330, 120)   # on hold
 RESUME = tone(330, 90, gap_ms=60) + tone(440, 90, gap_ms=60) + tone(660, 120)  # off hold
+HOLD_PIP = tone(330, 40, level=0.06, gap_ms=70) + tone(330, 40, level=0.06)    # still on hold
 
 
 def bridge_conf():
@@ -844,7 +845,6 @@ SWITCH = re.compile(r"^(?:please\s+)?(?:connect me|put me through|switch|go|take
 NEW = re.compile(r"^(?:please\s+)?(?:start|open|begin|create|give me)?\s*(?:me\s+)?(?:a\s+)?"
                  r"new\s+(?:session|conversation|chat)\s+(?:in|on|for|with)\s+(?:the\s+)?(.+?)[.!?]*$", re.I)
 LIST = re.compile(r"^(?:list|which|what)\s+(?:the\s+)?sessions\b", re.I)
-HOLD_WORDS = re.compile(r"\W*(?:hold|on hold|hold please)\W*", re.I)
 
 
 class Operator(Call):
@@ -1170,11 +1170,16 @@ class Operator(Call):
                          for i, s in enumerate(self.menu, 1))
         self.say(f"Sessions. {items} Press a number.", "menu")
 
+    @staticmethod
+    def is_hold_phrase(text):
+        said = " ".join(re.sub(r"[^\w\s']", " ", text.lower()).split())
+        return said in {" ".join(p.lower().split()) for p in config.section("keywords")["phrases"].get("hold", [])}
+
     async def on_text(self, text):
         if not text:
             self.say("Sorry, I didn't catch that.", "unclear")
             return
-        if HOLD_WORDS.fullmatch(text):  # in case the trigger words missed it
+        if self.is_hold_phrase(text):  # in case the trigger words missed it
             return self.hold()
         self.menu = None
         self.replied = False
@@ -1292,7 +1297,8 @@ class Operator(Call):
                 self.say("Press 0 to hear the list of sessions.", "hint")
 
     async def pip_loop(self):
-        """Soft pips while the current target is working and nothing else is being said, and the
+        """Soft pips while the current target is working and nothing else is being said (and a
+        different one every so often on hold), and the
         ready tone ([bridge] ready_tone) once it's the caller's turn to talk: when what's to be
         said has been, and the target isn't working (or about to, on what was just sent)."""
         was_ready = True  # (the greeting comes first)
@@ -1300,6 +1306,8 @@ class Operator(Call):
             await asyncio.sleep(0.1)
             t = self.target
             quiet = not self.held and not self.talking and not self.transcribing and self.utterance is None
+            if self.held and time.monotonic() - self.last_sound >= bridge_conf()["hold_pip_every_seconds"]:
+                await self.play(HOLD_PIP)
             if (quiet and t and t["status"] == "busy"
                     and time.monotonic() - self.last_sound >= bridge_conf()["pip_every_seconds"]):
                 await self.play(PIP)
