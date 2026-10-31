@@ -47,12 +47,17 @@ flowchart LR
 In a session:
 
 - Its replies are read aloud as they're written, in that session's own voice. A soft pip means
-  it's working.
+  it's working; a falling double beep that it's your turn to talk (a rising one: what you said
+  was sent).
 - Its multiple-choice questions are read out and answered with the keypad: digits choose (or
   tick, in a multi-select), `#` finishes a multi-select, `0` repeats the question, `*` the
   instructions.
 - `*` interrupts the current turn. Saying "stop" or "hang on" while it's speaking cuts the speech;
-  "cancel that" also interrupts. Interrupting never cancels background work.
+  "cancel that" also interrupts. Interrupting never cancels background work. Any key also cuts
+  the speech short (and does what it does straight away).
+- Saying "hold" puts the call on hold: what's being said pauses (to start that sentence again
+  later), replies wait, and nothing you say is heard, until you say "continue" or press a key.
+  Handy when you're talking to someone else.
 - Permission prompts are never answered by phone: a command read aloud can't be checked. The call
   tells you where to answer it and hangs up.
 - Once you're in a session you stay there; hang up and call again for the operator.

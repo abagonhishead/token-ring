@@ -37,6 +37,7 @@ mailbox = ""                   # the phone's mailbox for the voicemail light (""
                                # for phone = "PJSIP/100", as in pjsip.conf)
 answer_wait_seconds = 4.0      # calls from sessions: wait this long for a "hello"
 pip_every_seconds = 3.0        # soft pip while a session works in silence
+ready_tone = true              # a falling double beep when it's your turn to talk
 log_file = "/var/log/token-ring/bridge.log"   # also log here, for the web page ("" not to)
 
 [gateway]
@@ -125,13 +126,16 @@ disabled = []                  # voices that are never used
 [voices.rates]                 # per voice, or per model ("piper/en_GB-semaine-medium")
 # "piper/en_GB-alan-medium" = 1.1
 
-# Trigger words, heard while the AI is speaking (barge-in). The keypad's * works either way.
+# Trigger words: stop and interrupt are heard while the AI is speaking (barge-in), hold and
+# continue at any time. The keypad's * works either way.
 [keywords]
 engine = "vosk"                # built into the bridge image; "off" to switch off
 model = "/opt/vosk/model"      # a Vosk model directory
 [keywords.phrases]
-stop = ["stop", "hang on", "wait", "shush", "quiet"]   # stop speaking
+stop = ["stop", "hang on", "wait"]   # stop speaking
 interrupt = ["cancel that"]    # stop speaking and interrupt the current turn
+hold = ["hold"]                # pause: what's being said waits, and nothing's heard until...
+continue = ["continue"]        # ...this (or any key)
 
 # Telling the user about voicemail: when a session leaves one, and then every
 # remind_every_minutes while any is unheard. A notification is only counted as sent once it's

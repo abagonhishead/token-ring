@@ -61,6 +61,9 @@ log = logging.getLogger("token-ring")
 PIP = tone(520, 60, level=0.06)   # while a session is working and silent
 TICK = tone(1000, 40, level=0.08)  # a key was heard
 ACK = tone(880, 70, gap_ms=60) + tone(1175, 70)
+READY = tone(1175, 70, gap_ms=60) + tone(880, 70)            # ACK backwards: your turn to talk
+HOLD = tone(660, 90, gap_ms=60) + tone(440, 90, gap_ms=60) + tone(330, 120)   # on hold
+RESUME = tone(330, 90, gap_ms=60) + tone(440, 90, gap_ms=60) + tone(660, 120)  # off hold
 
 
 def bridge_conf():
@@ -436,6 +439,10 @@ class Call:
         self.queue = asyncio.Queue()  # (text, label, voice) waiting to be said
         self.voices = {}              # speaker -> the voice it has on this call (voice_of)
         self.current = None           # the speak() task playing now
+        self.resume = None            # what was being said when the call went on hold: said again after
+        self.held = False             # on hold: nothing's said or heard until "continue"
+        self.unheld = asyncio.Event()
+        self.unheld.set()
         self.stop_synth = threading.Event()
         self.transcribing = False
         self.dictating = False  # recording a voicemail: keep listening while transcribing
@@ -510,9 +517,41 @@ class Call:
     async def speaker(self):
         """Say queued phrases one after another."""
         while True:
-            text, label, spec = await self.queue.get()
-            self.current = asyncio.create_task(self.speak(text, label, spec))
+            item = self.resume = self.resume or await self.queue.get()
+            await self.unheld.wait()
+            if self.resume is not item:
+                continue  # dropped (hush) while on hold
+            self.resume = None
+            self.current = asyncio.create_task(self.speak(*item))
             await asyncio.wait([self.current])
+            if self.current.cancelled() and self.held and self.resume is None:
+                self.resume = item  # cut short by going on hold: said again from the start after
+
+    def hold(self):
+        """On hold: what's being said stops (to be said again from the start of that phrase), what
+        comes in waits, and nothing the caller says is heard, until resume()."""
+        if self.held:
+            return
+        log.info("%s on hold", self.uuid)
+        self.held = True
+        self.unheld.clear()
+        self.utterance, self.loud_run = None, 0
+        if self.current and not self.current.done():
+            self.stop_synth.set()
+            self.current.cancel()
+        asyncio.create_task(self.play(HOLD))
+
+    def unhold(self):
+        if not self.held:
+            return
+        log.info("%s off hold", self.uuid)
+        self.held = False
+
+        async def resume():
+            await self.play(RESUME)
+            if not self.held:
+                self.unheld.set()
+        asyncio.create_task(resume())
 
     def voice_of(self, key):
         """The voice a speaker ("operator" or a session key) has on this call: one from a group
@@ -527,6 +566,7 @@ class Call:
 
     def hush(self):
         """Stop speaking and drop anything still queued."""
+        self.resume = None
         while not self.queue.empty():
             self.queue.get_nowait()
         self.stop_synth.set()
@@ -535,14 +575,16 @@ class Call:
 
     @property
     def talking(self):
-        return (self.current is not None and not self.current.done()) or not self.queue.empty()
+        return not self.held and ((self.current is not None and not self.current.done())
+                                  or not self.queue.empty() or self.resume is not None)
 
     def hear(self, frame):
         """Feed one 20 ms frame of caller audio to the utterance detector. Caller audio is ignored
         while we're talking or transcribing (no barge-in yet)."""
         if self.history is not None:
             self.history.append(frame)
-        if self.talking or (self.transcribing and not self.dictating) or time.monotonic() < self.deaf_until:
+        if (self.talking or self.held or (self.transcribing and not self.dictating)
+                or time.monotonic() < self.deaf_until):
             self.utterance, self.loud_run = None, 0
             return
         db = frame_db(frame)
@@ -802,6 +844,7 @@ SWITCH = re.compile(r"^(?:please\s+)?(?:connect me|put me through|switch|go|take
 NEW = re.compile(r"^(?:please\s+)?(?:start|open|begin|create|give me)?\s*(?:me\s+)?(?:a\s+)?"
                  r"new\s+(?:session|conversation|chat)\s+(?:in|on|for|with)\s+(?:the\s+)?(.+?)[.!?]*$", re.I)
 LIST = re.compile(r"^(?:list|which|what)\s+(?:the\s+)?sessions\b", re.I)
+HOLD_WORDS = re.compile(r"\W*(?:hold|on hold|hold please)\W*", re.I)
 
 
 class Operator(Call):
@@ -818,6 +861,7 @@ class Operator(Call):
         self.menu = None      # targets just read out, while waiting for a number
         self.dialog = None    # a dialog on the current session's screen that the keypad answers
         self.rereading = 0.0  # when * or 0 last asked for the dialog again
+        self.sent_at = 0.0    # when something was last sent to the target (for the ready tone)
         self.pips = None
         self.spotter = None
         self.assistant = bridge_conf()["caller_id"]  # what the AI is called (the gateway says)
@@ -935,11 +979,18 @@ class Operator(Call):
             asyncio.create_task(report(call["call"], "no answer"))
 
     def on_keyword(self, action, phrase):
-        """A trigger word. Only acted on while speaking (barge-in); otherwise speech-to-text hears
-        it like anything else."""
+        """A trigger word. "hold" and "continue" count at any time (and on hold, only "continue");
+        the others only while speaking (barge-in): otherwise speech-to-text hears them like
+        anything else."""
+        if action == "continue":
+            return self.unhold()
+        if self.held or (self.talking and phrase in self.saying):
+            return  # on hold, or our own voice echoing back
+        if action == "hold":
+            return self.hold()
         working = self.target and self.target.get("status") == "busy"
-        if phrase in self.saying or not (self.talking or (action == "interrupt" and working)):
-            return  # our own voice echoing back, or nothing to cut in on
+        if not (self.talking or (action == "interrupt" and working)):
+            return  # nothing to cut in on
         log.info("%s trigger %r: %s", self.uuid, phrase, action)
         self.deaf_until = time.monotonic() + 1.0  # don't send the rest of the word to the session
         self.hush()
@@ -1034,7 +1085,7 @@ class Operator(Call):
             c = ev["connect"]
             asyncio.create_task(self.switch(f"new:{c['new']}" if "new" in c else c["key"]))
         elif "status" in ev:
-            t["status"] = ev["status"]
+            t["status"], t["status_at"] = ev["status"], time.monotonic()
             if ev["status"] == "down":
                 t["stop"].set()
                 del self.targets[key]
@@ -1123,6 +1174,8 @@ class Operator(Call):
         if not text:
             self.say("Sorry, I didn't catch that.", "unclear")
             return
+        if HOLD_WORDS.fullmatch(text):  # in case the trigger words missed it
+            return self.hold()
         self.menu = None
         self.replied = False
         if self.key != "operator":  # in a session, everything is for the session
@@ -1155,12 +1208,14 @@ class Operator(Call):
         if t["kind"] == "agent":
             if not t["agent"]:
                 t["pending"].append(text)
+                self.sent_at = time.monotonic()
                 await self.play(ACK)
                 return
             code, body = await self.api("POST", f"/agents/{t['agent']}/send", {"text": text})
         else:
             code, body = await self.api("POST", f"/sessions/{self.key}/send", {"text": text})
         if code == 200:
+            self.sent_at = time.monotonic()
             await self.play(ACK)
         elif code == 409:
             self.dialog = None
@@ -1189,6 +1244,7 @@ class Operator(Call):
         """Answer the dialog on screen; the event stream reads out what it changes to."""
         code, body = await self.api("POST", f"/sessions/{self.key}/keys", {"key": key})
         if code == 200:
+            self.sent_at = time.monotonic()
             await self.play(ACK)
         elif code == 409:  # it's gone or turned into something the phone mustn't answer
             self.dialog = None
@@ -1200,6 +1256,8 @@ class Operator(Call):
     async def on_dtmf(self, digit):
         log.info("%s key %s: dialog %s, menu %s, queued %d", self.uuid, digit,
                  self.dialog and self.dialog["kind"], bool(self.menu), self.queue.qsize())
+        if self.held:
+            return self.unhold()  # a key takes the call off hold (and does nothing else)
         if (digit in "0*" and self.dialog and self.rereading and time.monotonic() - self.rereading < 3
                 and self.talking):
             await self.play(TICK)
@@ -1234,13 +1292,22 @@ class Operator(Call):
                 self.say("Press 0 to hear the list of sessions.", "hint")
 
     async def pip_loop(self):
-        """Soft pips while the current target is working and nothing else is being said."""
+        """Soft pips while the current target is working and nothing else is being said, and the
+        ready tone ([bridge] ready_tone) once it's the caller's turn to talk: when what's to be
+        said has been, and the target isn't working (or about to, on what was just sent)."""
+        was_ready = True  # (the greeting comes first)
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
             t = self.target
-            if (t and t["status"] == "busy" and not self.talking and not self.transcribing
-                    and self.utterance is None and time.monotonic() - self.last_sound >= bridge_conf()["pip_every_seconds"]):
+            quiet = not self.held and not self.talking and not self.transcribing and self.utterance is None
+            if (quiet and t and t["status"] == "busy"
+                    and time.monotonic() - self.last_sound >= bridge_conf()["pip_every_seconds"]):
                 await self.play(PIP)
+            started = self.sent_at and t and t.get("status_at", 0) < self.sent_at and time.monotonic() - self.sent_at < 3
+            ready = quiet and t is not None and t["status"] != "busy" and not started
+            if ready and not was_ready and bridge_conf()["ready_tone"]:
+                await self.play(READY)
+            was_ready = ready
 
     async def on_end(self):
         if self.spotter:

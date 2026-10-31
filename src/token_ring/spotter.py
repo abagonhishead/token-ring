@@ -1,5 +1,5 @@
 """Trigger words: hear "stop" or "cancel that" while the caller is being spoken to (barge-in),
-within about half a second.
+within about half a second, and "hold" and "continue" at any time.
 
 [keywords]
 engine = "vosk"                    # built in; "off" to switch it off (the keypad's * still works)
@@ -7,6 +7,8 @@ model = "/opt/vosk/model"          # a Vosk model directory (the bridge image ha
 [keywords.phrases]
 stop = ["stop", "hang on", "wait"] # stop speaking
 interrupt = ["cancel that"]        # stop speaking and interrupt the current turn, like *
+hold = ["hold"]                    # on hold (at any time): what's being said pauses, and nothing
+continue = ["continue"]            # is heard but "continue" (or a key) until it's taken off
 
 Another engine (your own model, or a recogniser on another server) is a Spotter subclass named as
 the engine ("module:Class") or registered as a token_ring.spotters entry point.

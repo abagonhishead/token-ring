@@ -42,6 +42,7 @@ DEFAULTS = {
         "log_file": "",                # also log here (the web page reads it)
         "mailbox": "",                 # for the voicemail light ("": <phone's endpoint>@token-ring)
         "presence_every_seconds": 5.0, # session lines' presence (Custom:session<line>); 0: off
+        "ready_tone": True,            # a falling double beep when it's the caller's turn to talk
     },
     "gateway": {
         "host": "127.0.0.1",
@@ -66,8 +67,10 @@ DEFAULTS = {
     "voices": {"operator": "", "default": "", "pool": [], "groups": {}, "disabled": [], "sessions": {},
                "names": {}, "rates": {}, "rate": 1.0},
     "keywords": {"engine": "vosk", "model": "", "phrases": {
-        "stop": ["stop", "hang on", "wait", "shush", "quiet"],
+        "stop": ["stop", "hang on", "wait"],
         "interrupt": ["cancel that"],
+        "hold": ["hold"],            # on hold until "continue": nothing's said or heard
+        "continue": ["continue"],
     }},
     "vad": {"engine": "energy", "model": "", "threshold": 0.5, "near_db": 12, "min_level_db": -100,
             "noise_rise_db": 0, "record_dir": "", "record_keep": 200},

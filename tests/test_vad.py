@@ -119,7 +119,7 @@ def test_any_key_cuts_speech_short(conf):
 
     async def main():
         c = object.__new__(bridge.Operator)
-        c.uuid, c.dialog, c.menu, c.key, c.rereading = "test", None, None, "operator", 0.0
+        c.uuid, c.dialog, c.menu, c.key, c.rereading, c.held = "test", None, None, "operator", 0.0, False
         c.queue, c.current, c.voices = asyncio.Queue(), None, {}
         c.stop_synth = threading.Event()
 
